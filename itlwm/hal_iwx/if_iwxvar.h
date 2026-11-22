@@ -336,6 +336,7 @@ struct iwx_tx_data {
     int flags;
 #define IWX_TXDATA_FLAG_CMD_IS_NARROW  0x01
     uint8_t type;
+    uint16_t tx2I_token; // 1-based prepared-payload pool token; zero means none.
 };
 
 struct iwx_tx_ring {
@@ -412,6 +413,8 @@ enum IWX_CMD_MODE {
 	IWX_CMD_ASYNC		= (1 << 0),
 	IWX_CMD_WANT_RESP	= (1 << 1),
 	IWX_CMD_SEND_IN_RFKILL	= (1 << 2),
+	/* V29: HOST-ONLY provenance. Never serialized to firmware. */
+	IWX_CMD_S3_PRIVATE = (1 << 3),
 };
 enum iwx_hcmd_dataflag {
 	IWX_HCMD_DFL_NOCOPY     = (1 << 0),
@@ -610,6 +613,8 @@ struct iwx_softc {
     /* Task for ERP/HT prot/slot-time/EDCA updates. */
     struct task        mac_ctxt_task;
     struct task        chan_ctxt_task;
+    /* AIRPLAY: schedule-triggered P2P discovery session. */
+    struct task        awdl_p2p_session_task;
 
 	bus_space_tag_t sc_st;
 	bus_space_handle_t sc_sh;

@@ -481,7 +481,12 @@ getRATE(OSObject *object, struct apple80211_rate_data *rd)
         rd->version = APPLE80211_VERSION;
         rd->num_radios = 1;
         sgi = ieee80211_node_supports_sgi(ic->ic_bss);
-        if (ic->ic_curmode == IEEE80211_MODE_11AC) {
+        /* Use firmware-selected HE initial rate only when valid. */
+        uint32_t fwHeMbps = 0;
+        if (ic->ic_curmode == IEEE80211_MODE_11AX &&
+            fHalService->getDriverInfo()->getFirmwareTxRateMbps(&fwHeMbps)) {
+            rd->rate[0] = fwHeMbps;
+        } else if (ic->ic_curmode == IEEE80211_MODE_11AC) {
             if (sgi)
                 index += 1;
             nss = fHalService->getDriverInfo()->getTxNSS();
@@ -955,7 +960,7 @@ getNOISE(OSObject *object,
         nd->version = APPLE80211_VERSION;
         nd->num_radios = 1;
         nd->noise[0]
-        = nd->aggregate_noise = -fHalService->getDriverInfo()->getBSSNoise();
+        = nd->aggregate_noise = fHalService->getDriverInfo()->getBSSNoise(); /* NOISEFIX: already dBm (negative), no sign flip */
         nd->noise_unit = APPLE80211_UNIT_DBM;
         return kIOReturnSuccess;
     }
@@ -1021,32 +1026,60 @@ setPOWER(OSObject *object,
     return kIOReturnSuccess;
 }
 
+static volatile UInt32 gAJB26InfraAssocEnter = 0;
+static volatile UInt32 gAJB26InfraAssocSkipPreScan = 0;
+static volatile UInt32 gAJB26InfraAssocSkipAuthAssoc = 0;
+static volatile UInt32 gAJB26InfraDisassocEnter = 0;
+static volatile UInt32 gAJB26InfraDisassocSkipPreScan = 0;
+static volatile UInt32 gAJB26InfraDisassocSkipAuthAssoc = 0;
+
 IOReturn AirportItlwm::
 setASSOCIATE(OSObject *object,
                              struct apple80211_assoc_data *ad)
 {
-    XYLog("%s [%s] mode=%d ad_auth_lower=%d ad_auth_upper=%d rsn_ie_len=%d%s%s%s%s%s%s%s\n", __FUNCTION__, ad->ad_ssid, ad->ad_mode, ad->ad_auth_lower, ad->ad_auth_upper, ad->ad_rsn_ie_len,
-          (ad->ad_flags & 2) ? ", Instant Hotspot" : "",
-          (ad->ad_flags & 4) ? ", Auto Instant Hotspot" : "",
-          (ad->ad_rsn_ie[APPLE80211_MAX_RSN_IE_LEN] & 1) ? ", don't disassociate" : "",
-          (ad->ad_rsn_ie[APPLE80211_MAX_RSN_IE_LEN] & 2) ? ", don't blacklist" : "",
-          (ad->ad_rsn_ie[APPLE80211_MAX_RSN_IE_LEN] & 4) ? ", closed Network" : "",
-          (ad->ad_rsn_ie[APPLE80211_MAX_RSN_IE_LEN] & 8) ? ", 802.1X" : "",
-          (ad->ad_rsn_ie[APPLE80211_MAX_RSN_IE_LEN] & 0x20) ? ", force BSSID" : "");
+    if (!ad)
+        return kIOReturnError;
+    
+    XYLog("%s mode=%d ad_ssid_len=%u ad_auth_lower=%d ad_auth_upper=%d rsn_ie_len=%u\n",
+          __FUNCTION__, ad->ad_mode, (unsigned int)ad->ad_ssid_len,
+          ad->ad_auth_lower, ad->ad_auth_upper, (unsigned int)ad->ad_rsn_ie_len);
     
     struct apple80211_rsn_ie_data rsn_ie_data;
     struct apple80211_authtype_data auth_type_data;
     struct ieee80211com *ic = fHalService->get80211Controller();
 
-    if (!ad)
+    UInt32 ajb26Enter = __sync_add_and_fetch(
+        &gAJB26InfraAssocEnter, (UInt32)1);
+    setProperty(
+        "AJB26InfraAssocEnter",
+        (unsigned long long)ajb26Enter, 32);
+    setProperty(
+        "AJB26InfraAssocLastState",
+        (unsigned long long)(UInt32)ic->ic_state, 32);
+
+    
+    if (ic->ic_state < IEEE80211_S_SCAN) {
+        UInt32 ajb26Skip = __sync_add_and_fetch(
+            &gAJB26InfraAssocSkipPreScan, (UInt32)1);
+        setProperty(
+            "AJB26InfraAssocSkipPreScan",
+            (unsigned long long)ajb26Skip, 32);
+        return kIOReturnSuccess;
+    }
+    
+    if (ic->ic_state == IEEE80211_S_ASSOC ||
+        ic->ic_state == IEEE80211_S_AUTH) {
+        UInt32 ajb26Skip = __sync_add_and_fetch(
+            &gAJB26InfraAssocSkipAuthAssoc, (UInt32)1);
+        setProperty(
+            "AJB26InfraAssocSkipAuthAssoc",
+            (unsigned long long)ajb26Skip, 32);
+        return kIOReturnSuccess;
+    }
+
+    if (ad->ad_ssid_len > APPLE80211_MAX_SSID_LEN)
         return kIOReturnError;
     
-    if (ic->ic_state < IEEE80211_S_SCAN)
-        return kIOReturnSuccess;
-    
-    if (ic->ic_state == IEEE80211_S_ASSOC || ic->ic_state == IEEE80211_S_AUTH)
-        return kIOReturnSuccess;
-
     if (ad->ad_mode != APPLE80211_AP_MODE_IBSS) {
         disassocIsVoluntary = false;
         auth_type_data.version = APPLE80211_VERSION;
@@ -1082,14 +1115,36 @@ IOReturn AirportItlwm::setDISASSOCIATE(OSObject *object)
     XYLog("%s\n", __FUNCTION__);
     struct ieee80211com *ic = fHalService->get80211Controller();
 
-    if (ic->ic_state < IEEE80211_S_SCAN)
+    UInt32 ajb26Enter = __sync_add_and_fetch(
+        &gAJB26InfraDisassocEnter, (UInt32)1);
+    setProperty(
+        "AJB26InfraDisassocEnter",
+        (unsigned long long)ajb26Enter, 32);
+    setProperty(
+        "AJB26InfraDisassocLastState",
+        (unsigned long long)(UInt32)ic->ic_state, 32);
+
+    if (ic->ic_state < IEEE80211_S_SCAN) {
+        UInt32 ajb26Skip = __sync_add_and_fetch(
+            &gAJB26InfraDisassocSkipPreScan, (UInt32)1);
+        setProperty(
+            "AJB26InfraDisassocSkipPreScan",
+            (unsigned long long)ajb26Skip, 32);
         return kIOReturnSuccess;
+    }
     
     if (ic->ic_state > IEEE80211_S_AUTH && ic->ic_bss != NULL)
         IEEE80211_SEND_MGMT(ic, ic->ic_bss, IEEE80211_FC0_SUBTYPE_DEAUTH, IEEE80211_REASON_AUTH_LEAVE);
     
-    if (ic->ic_state == IEEE80211_S_ASSOC || ic->ic_state == IEEE80211_S_AUTH)
+    if (ic->ic_state == IEEE80211_S_ASSOC ||
+        ic->ic_state == IEEE80211_S_AUTH) {
+        UInt32 ajb26Skip = __sync_add_and_fetch(
+            &gAJB26InfraDisassocSkipAuthAssoc, (UInt32)1);
+        setProperty(
+            "AJB26InfraDisassocSkipAuthAssoc",
+            (unsigned long long)ajb26Skip, 32);
         return kIOReturnSuccess;
+    }
     
     disassocIsVoluntary = true;
 
@@ -1340,7 +1395,7 @@ setSCAN_REQ(OSObject *object,
           sd->ssid,
           ether_sprintf(sd->bssid.octet));
 #endif
-    if (fScanResultWrapping)
+    if (fScanResultWrapping)   /* SCANGUARD: as MILESTONE-REPRO */
         return 22;
     if (ic->ic_state <= IEEE80211_S_INIT)
         return 22;
@@ -1378,7 +1433,7 @@ setSCAN_REQ_MULTIPLE(OSObject *object, struct apple80211_scan_multiple_data *sd)
     for (i = 0; i < sd->ssid_count; i++)
         XYLog("%s index=%d ssid=%s ssid_len=%d\n", __FUNCTION__, i, sd->ssids[i].ssid_bytes, sd->ssids[i].ssid_len);
 #endif
-    if (fScanResultWrapping)
+    if (fScanResultWrapping)   /* SCANGUARD: as MILESTONE-REPRO */
         return 22;
     if (ic->ic_state <= IEEE80211_S_INIT)
         return 22;
@@ -1404,6 +1459,14 @@ getSCAN_RESULT(OSObject *object, struct apple80211_scan_result **sr)
             if (fNextNodeToSend == NULL)
                 return 12;
         }
+    } else if (RB_FIND(ieee80211_tree,
+                       &ic->ic_tree,
+                       fNextNodeToSend) != fNextNodeToSend) {
+        fNextNodeToSend = RB_MIN(ieee80211_tree, &ic->ic_tree);
+        if (fNextNodeToSend == NULL) {
+            fScanResultWrapping = false;
+            return 12;
+        }
     }
 //    XYLog("%s ni_bssid=%s ni_essid=%s channel=%d flags=%d asr_cap=%d asr_nrates=%d asr_ssid_len=%d asr_ie_len=%d asr_rssi=%d\n", __FUNCTION__, ether_sprintf(fNextNodeToSend->ni_bssid), fNextNodeToSend->ni_essid, ieee80211_chan2ieee(ic, fNextNodeToSend->ni_chan), ieeeChanFlag2apple(fNextNodeToSend->ni_chan->ic_flags), fNextNodeToSend->ni_capinfo, fNextNodeToSend->ni_rates.rs_nrates, fNextNodeToSend->ni_esslen, fNextNodeToSend->ni_rsnie_tlv == NULL ? 0 : fNextNodeToSend->ni_rsnie_tlv_len, fNextNodeToSend->ni_rssi);
     apple80211_scan_result* result = (apple80211_scan_result* )fNextNodeToSend->verb;
@@ -1423,9 +1486,9 @@ getSCAN_RESULT(OSObject *object, struct apple80211_scan_result **sr)
 #endif
     }
     result->asr_beacon_int = fNextNodeToSend->ni_intval;
+    result->asr_nrates = fNextNodeToSend->ni_rates.rs_nrates;
     for (int i = 0; i < result->asr_nrates; i++ )
         result->asr_rates[i] = fNextNodeToSend->ni_rates.rs_rates[i];
-    result->asr_nrates = fNextNodeToSend->ni_rates.rs_nrates;
     result->asr_age = (uint32_t)(airport_up_time() - fNextNodeToSend->ni_age_ts);
     result->asr_cap = fNextNodeToSend->ni_capinfo;
     result->asr_channel.version = APPLE80211_VERSION;
@@ -1435,7 +1498,7 @@ getSCAN_RESULT(OSObject *object, struct apple80211_scan_result **sr)
 #else
     result->asr_channel.flags = ieeeChanFlag2appleScanFlagVentura(fNextNodeToSend->ni_chan->ic_flags);
 #endif
-    result->asr_noise = -fHalService->getDriverInfo()->getBSSNoise();
+    result->asr_noise = fHalService->getDriverInfo()->getBSSNoise(); /* NOISEFIX: already dBm (negative), no sign flip */
     result->asr_rssi = -(0 - IWM_MIN_DBM - fNextNodeToSend->ni_rssi);
     memcpy(result->asr_bssid, fNextNodeToSend->ni_bssid, IEEE80211_ADDR_LEN);
     result->asr_ssid_len = fNextNodeToSend->ni_esslen;
@@ -1453,10 +1516,6 @@ getSCAN_RESULT(OSObject *object, struct apple80211_scan_result **sr)
 IOReturn AirportItlwm::
 setVIRTUAL_IF_CREATE(OSObject *object, struct apple80211_virt_if_create_data* data)
 {
-    // From Ventura, the virtual interface sequence has channged, now temporary disabled the virtual interface creation because it is no functionality. This fix the issue of delaying start time of associating to AP.
-#if __IO80211_TARGET >= __MAC_13_0
-    return kIOReturnUnsupported;
-#else
     struct ether_addr addr;
     struct apple80211_channel chann;
     XYLog("%s role=%d, bsd_name=%s, mac=%s, unk1=%d\n", __FUNCTION__, data->role, data->bsd_name,
@@ -1489,13 +1548,19 @@ setVIRTUAL_IF_CREATE(OSObject *object, struct apple80211_virt_if_create_data* da
         chann.version = 1;
         chann.flags = APPLE80211_C_FLAG_5GHZ | APPLE80211_C_FLAG_ACTIVE | APPLE80211_C_FLAG_80MHZ;
         setInfraChannel(&chann);
+        if (!inf->attach(this)) {
+            XYLog("%s failed to attach AWDL interface to controller\n", __FUNCTION__);
+            inf->release();
+            return kIOReturnError;
+        }
+
         fAWDLInterface = inf;
+        inf->registerService();
     } else {
         XYLog("%s unhandled virtual interface role type: %d\n", __FUNCTION__, data->role);
         return kIOReturnError;
     }
     return kIOReturnSuccess;
-#endif
 }
 
 IOReturn AirportItlwm::
@@ -1522,10 +1587,11 @@ getLINK_CHANGED_EVENT_DATA(OSObject *object, struct apple80211_link_changed_even
     bzero(ed, sizeof(apple80211_link_changed_event_data));
     ed->isLinkDown = !(currentStatus & kIONetworkLinkActive);
     if (ed->isLinkDown) {
-        ed->voluntary = disassocIsVoluntary;
+        ed->isInvoluntary = !disassocIsVoluntary;   /* INVOLFIX: byte 16 = isInvoluntary */
         ed->reason = APPLE80211_LINK_DOWN_REASON_DEAUTH;
+        ed->subreason = (uint32_t)ic->ic_deauth_reason;
     } else
         ed->rssi = -(0 - IWM_MIN_DBM - ic->ic_bss->ni_rssi);
-    XYLog("Link %s, reason: %d, voluntary: %d\n", ed->isLinkDown ? "down" : "up", ed->reason, ed->voluntary);
+    XYLog("Link %s, reason: %d, subreason: %d, involuntary: %d\n", ed->isLinkDown ? "down" : "up", ed->reason, ed->subreason, ed->isInvoluntary);
     return kIOReturnSuccess;
 }

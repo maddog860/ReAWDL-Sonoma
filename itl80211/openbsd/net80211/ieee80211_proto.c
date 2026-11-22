@@ -1298,8 +1298,12 @@ ieee80211_auth_open(struct ieee80211com *ic, const struct ieee80211_frame *wh,
 #endif	/* IEEE80211_STA_ONLY */
 
 	case IEEE80211_M_STA:
+		IEEE80211_JOINSTAT(authRespRx);
+		if (IEEE80211_JS_BSS_5G(ic))
+			IEEE80211_JOINSTAT(a5RespRx); /* BAND5PROBE */
 		if (ic->ic_state != IEEE80211_S_AUTH ||
 		    seq != IEEE80211_AUTH_OPEN_RESPONSE) {
+			IEEE80211_JOINSTAT(authRespWrongState);
 			ic->ic_stats.is_rx_bad_auth++;
 			DPRINTF(("discard auth from %s; state %u, seq %u\n",
 			    ether_sprintf((u_int8_t *)wh->i_addr2),
@@ -1315,6 +1319,8 @@ ieee80211_auth_open(struct ieee80211com *ic, const struct ieee80211_frame *wh,
 			    &ic->ic_bss->ni_pairwise_key);
 		}
 		if (status != 0) {
+			ieee80211_js.authRespLastStatus = status;
+			IEEE80211_JOINSTAT(authRespFail);
 			if (ifp->if_flags & IFF_DEBUG)
 				XYLog("%s: open authentication failed "
 				    "(status %d) for %s\n", ifp->if_xname,
@@ -1327,6 +1333,10 @@ ieee80211_auth_open(struct ieee80211com *ic, const struct ieee80211_frame *wh,
 			ic->ic_stats.is_rx_auth_fail++;
 			return;
 		}
+		ieee80211_js.authRespMs = ieee80211_js_now_ms() - ieee80211_js.authTxStampMs;
+		IEEE80211_JOINSTAT(authRespOk);
+		if (IEEE80211_JS_BSS_5G(ic))
+			IEEE80211_JOINSTAT(a5RespOk); /* BAND5PROBE */
 		ieee80211_new_state(ic, IEEE80211_S_ASSOC,
 		    wh->i_fc[0] & IEEE80211_FC0_SUBTYPE_MASK);
 		break;
@@ -1417,6 +1427,18 @@ ieee80211_newstate(struct ieee80211com *ic, enum ieee80211_state nstate,
 		XYLog("%s: %s -> %s\n", ifp->if_xname,
 		    ieee80211_state_name[ostate], ieee80211_state_name[nstate]);
 	ic->ic_state = nstate;			/* state transition */
+	switch (nstate) {
+	case IEEE80211_S_INIT:  IEEE80211_JOINSTAT(stToInit);  break;
+	case IEEE80211_S_SCAN:
+		IEEE80211_JOINSTAT(stToScan);
+		if (ostate == IEEE80211_S_RUN)
+			IEEE80211_JOINSTAT(stRunToScan);
+		break;
+	case IEEE80211_S_AUTH:  IEEE80211_JOINSTAT(stToAuth);  break;
+	case IEEE80211_S_ASSOC: IEEE80211_JOINSTAT(stToAssoc); break;
+	case IEEE80211_S_RUN:   IEEE80211_JOINSTAT(stToRun);   break;
+	default: break;
+	}
 	ni = ic->ic_bss;			/* NB: no reference held */
 	ieee80211_set_link_state(ic, LINK_STATE_DOWN);
 	ic->ic_xflags &= ~IEEE80211_F_TX_MGMT_ONLY;
@@ -1733,9 +1755,11 @@ ieee80211_set_link_state(struct ieee80211com *ic, int nstate)
     if (link_state != ifp->if_link_state) {
         ifp->if_link_state = link_state;
         if (link_state == LINK_STATE_UP) {
+            IEEE80211_JOINSTAT(linkUp);
             XYLog("%s LINK_STATE_IS_UP\n", __FUNCTION__);
             ifp->controller->setLinkStatus(kIONetworkLinkValid | kIONetworkLinkActive, ifp->controller->getCurrentMedium());
         } else {
+            IEEE80211_JOINSTAT(linkDown);
             XYLog("%s LINK_STATE_IS_DOWN\n", __FUNCTION__);
             ifp->controller->setLinkStatus(kIONetworkLinkValid);
         }

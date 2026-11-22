@@ -703,4 +703,110 @@ void ieee80211_begin_cache_bgscan(struct _ifnet *);
 
 extern	int ieee80211_cache_size;
 
+/*
+ * REGFIX: join-pipeline counters. Published to ioreg as AIRPLAYJOIN*
+ * by AirportItlwm::watchdogAction() whenever 'gen' changes.
+ */
+struct ieee80211_joinstats {
+	u_int32_t gen;
+	u_int32_t endScanCalls;
+	u_int32_t endScanBg;
+	u_int32_t endScanEmptyTree;
+	u_int32_t endScanNoCandidate;
+	u_int32_t endScanJoinBss;
+	u_int32_t endScanJoinDesired;
+	u_int32_t desiredSeen;
+	u_int32_t desiredSkippedFails;
+	u_int32_t desiredMatchFail;
+	u_int32_t desiredLastFailBits;
+	u_int32_t stToInit;
+	u_int32_t stToScan;
+	u_int32_t stRunToScan;
+	u_int32_t stToAuth;
+	u_int32_t stToAssoc;
+	u_int32_t stToRun;
+	u_int32_t mgtTimeoutAuth;
+	u_int32_t mgtTimeoutAssoc;
+	u_int32_t linkUp;
+	u_int32_t linkDown;
+	/* AUTHPROBE: first-contact (authentication) pipeline */
+	u_int32_t authStart;
+	u_int32_t authErr;
+	u_int32_t authLastErr;
+	u_int32_t authChanMatch;
+	u_int32_t authChanMismatch;
+	u_int32_t authLastChan;
+	u_int32_t authProtCmdErr;
+	u_int32_t authProtDurTU;
+	u_int32_t authProtCmdStampMs;
+	u_int32_t authProtStart;
+	u_int32_t authProtEnd;
+	u_int32_t authProtFail;
+	u_int32_t authProtStartMs;
+	u_int32_t authProtEndDuringJoin;
+	u_int32_t authTxBuilt;
+	u_int32_t authTxStampMs;
+	u_int32_t authTxEnter;
+	u_int32_t authTxToFw;
+	u_int32_t authMgmtTxOk;
+	u_int32_t authMgmtTxFail;
+	u_int32_t authMgmtTxLastStatus;
+	u_int32_t authRxFromTarget;
+	u_int32_t authRxBeaconFromTarget;
+	u_int32_t authRespRx;
+	u_int32_t authRespOk;
+	u_int32_t authRespFail;
+	u_int32_t authRespLastStatus;
+	u_int32_t authRespWrongState;
+	u_int32_t authRespMs;
+	u_int32_t authRetry;
+	u_int32_t authNewstateErr;
+	u_int32_t authNewstateErrState;
+	u_int32_t authNewstateLastErr;
+	/* BAND5PROBE: the same pipeline, counted only when the join target is 5 GHz */
+	u_int32_t a5Start;
+	u_int32_t a5BandChange;      /* PHY0 was on 2.4 GHz when this auth started */
+	u_int32_t a5ScanActive;      /* firmware scan / bgscan still flagged at auth start */
+	u_int32_t a5PhyErr;          /* last PHY update error (0 = ok) */
+	u_int32_t a5PhyErrCount;
+	u_int32_t a5TxToFw;
+	u_int32_t a5LastRateNFlags;  /* rate_n_flags used for the last 5 GHz auth frame */
+	u_int32_t a5MgmtTxOk;
+	u_int32_t a5MgmtTxFail;
+	u_int32_t a5MgmtTxLastStatus;
+	u_int32_t a5RxFromTarget;
+	u_int32_t a5RxBeacon;
+	u_int32_t a5RespRx;
+	u_int32_t a5RespOk;
+	u_int32_t a5Timeout;
+	/* AUTHDROP: auth frame dropped inside iwx_tx() before the firmware, by exit */
+	u_int32_t dropRingEmpty;
+	u_int32_t dropTxBlocked;     /* fTx2IBlocked set (TX quarantined) */
+	u_int32_t dropSlotBusy;      /* ring->data[idx].m still holds an old frame */
+	u_int32_t dropSlotToken;     /* ring->data[idx].tx2I_token still set */
+	u_int32_t dropAdmission;     /* tx2JEnter() refused */
+	u_int32_t dropNotRunning;    /* !IFF_RUNNING or SHUTDOWN */
+	u_int32_t dropMapFail;       /* nsegs == 0 */
+	u_int32_t dropLastQid;
+	u_int32_t dropLastIdx;
+	u_int32_t dropLastQueued;    /* ring->queued at the last drop */
+	/* FLUSHRETIRE */
+	u_int32_t flushCalls;        /* flush responses that retired >= 1 frame */
+	u_int32_t flushRetired;      /* frames retired normally from flush responses */
+	/* FLUSHRECLAIM */
+	u_int32_t flushQueuesReported;
+	u_int32_t flushOldCheckWouldSkip;
+	u_int32_t flushRingNotLive;
+};
+#define IEEE80211_JS_BSS_5G(ic) ((ic)->ic_bss != NULL && (ic)->ic_bss->ni_chan != NULL && \
+	IEEE80211_IS_CHAN_5GHZ((ic)->ic_bss->ni_chan))
+extern struct ieee80211_joinstats ieee80211_js;
+#define IEEE80211_JOINSTAT(f) do { ieee80211_js.f++; ieee80211_js.gen++; } while (0)
+static inline u_int32_t ieee80211_js_now_ms(void)
+{
+	struct timeval tv;
+	microuptime(&tv);
+	return (u_int32_t)(tv.tv_sec * 1000 + tv.tv_usec / 1000);
+}
+
 #endif /* _NET80211_IEEE80211_VAR_H_ */

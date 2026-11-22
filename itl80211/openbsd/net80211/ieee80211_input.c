@@ -3462,6 +3462,21 @@ void
 ieee80211_recv_mgmt(struct ieee80211com *ic, mbuf_t m,
                     struct ieee80211_node *ni, struct ieee80211_rxinfo *rxi, int subtype)
 {
+    /* AUTHPROBE: is the radio hearing the target router while authenticating? */
+    if (ic->ic_opmode == IEEE80211_M_STA && ic->ic_state == IEEE80211_S_AUTH &&
+        ic->ic_bss != NULL && mbuf_len(m) >= sizeof(struct ieee80211_frame)) {
+        const struct ieee80211_frame *apwh = mtod(m, const struct ieee80211_frame *);
+        if (IEEE80211_ADDR_EQ(apwh->i_addr2, ic->ic_bss->ni_bssid)) {
+            IEEE80211_JOINSTAT(authRxFromTarget);
+            if (subtype == IEEE80211_FC0_SUBTYPE_BEACON)
+                IEEE80211_JOINSTAT(authRxBeaconFromTarget);
+            if (IEEE80211_JS_BSS_5G(ic)) { /* BAND5PROBE */
+                IEEE80211_JOINSTAT(a5RxFromTarget);
+                if (subtype == IEEE80211_FC0_SUBTYPE_BEACON)
+                    IEEE80211_JOINSTAT(a5RxBeacon);
+            }
+        }
+    }
     switch (subtype) {
         case IEEE80211_FC0_SUBTYPE_BEACON:
             ieee80211_recv_probe_resp(ic, m, ni, rxi, 0);

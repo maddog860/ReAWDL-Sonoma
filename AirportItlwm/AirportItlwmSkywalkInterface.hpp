@@ -15,7 +15,29 @@ class AirportItlwmSkywalkInterface : public IO80211InfraProtocol {
     OSDeclareDefaultStructors(AirportItlwmSkywalkInterface)
     
 public:
+    /* CHANIOCTL-REGISTRY: read-only command dispatch observation. */
+    virtual bool isCommandProhibited(int selector) override {
+        bool prohibited = IO80211SkywalkInterface::isCommandProhibited(selector);
+        if (selector == 207) {
+            static volatile UInt32 calls207 = 0;
+            UInt32 hits = __sync_add_and_fetch(&calls207, 1);
+            setProperty("AIRPLAYChanIoctlCheck207Calls", (unsigned long long)hits, 32);
+            setProperty("AIRPLAYChanIoctlCheck207Prohibited", (unsigned long long)(prohibited ? 1 : 0), 8);
+        } else if (selector == 379) {
+            static volatile UInt32 calls379 = 0;
+            UInt32 hits = __sync_add_and_fetch(&calls379, 1);
+            setProperty("AIRPLAYChanIoctlCheck379Calls", (unsigned long long)hits, 32);
+            setProperty("AIRPLAYChanIoctlCheck379Prohibited", (unsigned long long)(prohibited ? 1 : 0), 8);
+        }
+        return prohibited;
+    }
+
     virtual bool init(IOService *) override;
+    virtual const char *getBSDNamePrefix(void) override;
+    virtual void *createPeerManager(void) override;
+    virtual IOReturn reportDataPathEvents(UInt, void *, unsigned long, bool) override;
+    virtual void setDataPathState(bool) override;
+    virtual void *getP2PSkywalkPeerMgr(void) override;
 //    virtual ifnet_t getBSDInterface(void) override;
     
     void associateSSID(uint8_t *ssid, uint32_t ssid_len, const struct ether_addr &bssid, uint32_t authtype_lower, uint32_t authtype_upper, uint8_t *key, uint32_t key_len, int key_index);
@@ -65,7 +87,7 @@ public:
     virtual IOReturn getVHT_MCS_INDEX_SET(apple80211_vht_mcs_index_set_data *) override;
     virtual IOReturn getMCS_VHT(apple80211_mcs_vht_data *) override;
     virtual IOReturn getGAS_RESULTS(apple80211_gas_result_t *) override { return kIOReturnUnsupported; }
-    virtual IOReturn getCHANNELS_INFO(apple80211_channels_info *) override { return kIOReturnUnsupported; }
+    virtual IOReturn getCHANNELS_INFO(apple80211_channels_info *) override; // SONOMA14-CHAN207-V1
     virtual IOReturn getVHT_CAPABILITY(apple80211_vht_capability *) override { return kIOReturnUnsupported; }
     virtual IOReturn getBGSCAN_CACHE_RESULTS(apple80211_bgscan_cached_network_data_list *) override { return kIOReturnUnsupported; }
     virtual IOReturn getROAM_PROFILE(apple80211_roam_profile_band_data *) override { return kIOReturnUnsupported; }
@@ -76,7 +98,10 @@ public:
     virtual IOReturn getPRIVATE_MAC(apple80211_private_mac_data *) override { return kIOReturnUnsupported; }
     virtual IOReturn getRANGING_ENABLE(apple80211_ranging_enable_request_t *) override { return kIOReturnUnsupported; }
     virtual IOReturn getRANGING_START(apple80211_ranging_start_request_t *) override { return kIOReturnUnsupported; }
-    virtual IOReturn getAWDL_RSDB_CAPS(apple80211_rsdb_capability *) override { return kIOReturnUnsupported; }
+    virtual IOReturn getAWDL_RSDB_CAPS(apple80211_rsdb_capability *data) override {
+        IOLog("AIRPLAY AWDL TRACE: getAWDL_RSDB_CAPS data=%p\n", data);
+        return kIOReturnUnsupported;
+    }
     virtual IOReturn getTKO_PARAMS(apple80211_tko_params *) override { return kIOReturnUnsupported; }
     virtual IOReturn getTKO_DUMP(apple80211_tko_dump *) override { return kIOReturnUnsupported; }
     virtual IOReturn getHW_SUPPORTED_CHANNELS(apple80211_sup_channel_data *) override { return kIOReturnUnsupported; }
@@ -102,7 +127,10 @@ public:
     virtual IOReturn getHW_ADDR(apple80211_hw_mac_address *) override { return kIOReturnUnsupported; }
     virtual IOReturn getHE_MCS_INDEX_SET(apple80211_he_mcs_index_set_data *) override { return kIOReturnUnsupported; }
     virtual IOReturn getCHIP_DIAGS(appl80211_chip_diags_data *) override { return kIOReturnUnsupported; }
-    virtual IOReturn getHP2P_CTRL(apple80211_hp2p_ctrl *) override { return kIOReturnUnsupported; }
+    virtual IOReturn getHP2P_CTRL(apple80211_hp2p_ctrl *data) override {
+        IOLog("AIRPLAY P2P TRACE: getHP2P_CTRL data=%p\n", data);
+        return kIOReturnUnsupported;
+    }
     virtual IOReturn getREQUEST_BSS_BLACKLIST(void *) override { return kIOReturnUnsupported; }
     virtual IOReturn getASSOC_READY_STATUS(apple80211_assoc_ready *) override { return kIOReturnUnsupported; }
     virtual IOReturn getTXRX_CHAIN_INFO(apple80211_txrx_chain_info *) override { return kIOReturnUnsupported; }
@@ -110,7 +138,13 @@ public:
     virtual IOReturn getCUR_PMK(apple80211_pmk *) override { return kIOReturnUnsupported; }
     virtual IOReturn getDYNSAR_DETAIL(apple80211_dynsar_detail *) override { return kIOReturnUnsupported; }
     virtual IOReturn getRANDOMISATION_STATUS(apple80211_mac_randomisation_status *) override { return kIOReturnUnsupported; }
-    virtual IOReturn getCOUNTRY_CHANNELS_INFO(apple80211_channels_info *) override { return kIOReturnUnsupported; }
+    virtual IOReturn getCOUNTRY_CHANNELS_INFO(apple80211_channels_info *) override {
+        static volatile UInt32 calls = 0;
+        UInt32 hits = __sync_add_and_fetch(&calls, 1);
+        setProperty("AIRPLAYChanIoctlGet379Calls", (unsigned long long)hits, 32);
+        IOLog("AIRPLAY CHANIOCTL PROBE getCOUNTRY_CHANNELS_INFO ret=0x%08x\n", (unsigned int)kIOReturnUnsupported);
+        return kIOReturnUnsupported;
+    }
     virtual IOReturn getLQM_SUMMARY(apple80211_lqm_summary *) override { return kIOReturnUnsupported; }
     virtual IOReturn getCOLOCATED_NETWORK_SCOPE_ID(apple80211_colocated_network_scope_id *) override;
     virtual IOReturn getBEACON_SCAN_CACHE_REQ(apple80211_scan_result *) override { return kIOReturnUnsupported; }
@@ -127,9 +161,15 @@ public:
     virtual IOReturn getWCL_GET_TX_BLANKING_STATUS(uint *) override { return kIOReturnUnsupported; }
     virtual IOReturn getSSID_TRANSITION_SUPPORT(apple80211_ssid_transition_feature_enabled *) override { return kIOReturnUnsupported; }
     virtual IOReturn getWCL_VALID_CHANNEL_COUNT(unsigned long *) override { return kIOReturnUnsupported; }
-    virtual IOReturn getWCL_P2P_STATUS_FOR_SCAN(p2pStatusForScan *) override { return kIOReturnUnsupported; }
+    virtual IOReturn getWCL_P2P_STATUS_FOR_SCAN(p2pStatusForScan *data) override {
+        IOLog("AIRPLAY P2P TRACE: getWCL_P2P_STATUS_FOR_SCAN data=%p\n", data);
+        return kIOReturnUnsupported;
+    }
     virtual IOReturn getWCL_CHANNELS_INFO(apple80211ChannelInfo *) override { return kIOReturnUnsupported; }
-    virtual IOReturn getP2P_STEERING_METRIC(apple80211_p2p_steering_metrics *) override { return kIOReturnUnsupported; }
+    virtual IOReturn getP2P_STEERING_METRIC(apple80211_p2p_steering_metrics *data) override {
+        IOLog("AIRPLAY P2P TRACE: getP2P_STEERING_METRIC data=%p\n", data);
+        return kIOReturnUnsupported;
+    }
     virtual IOReturn getRSN_XE(apple80211_rsn_xe_data *) override { return kIOReturnUnsupported; }
     virtual IOReturn getSIB_COEX_STATUS(apple80211_sib_coex_status *) override { return kIOReturnUnsupported; }
     virtual IOReturn getWCL_EXTENDED_BSS_INFO(apple80211_extended_bss_info *) override { return kIOReturnUnsupported; }
@@ -165,11 +205,15 @@ public:
     virtual IOReturn setIE(apple80211_ie_data *) override { return kIOReturnUnsupported; }
     virtual IOReturn setWOW_TEST(apple80211_wow_test_data *) override { return kIOReturnUnsupported; }
     virtual IOReturn setSCANCACHE_CLEAR(void *) override;
-    virtual IOReturn setVIRTUAL_IF_CREATE(apple80211_virt_if_create_data *) override { return kIOReturnUnsupported; }
+    virtual IOReturn setVIRTUAL_IF_CREATE(apple80211_virt_if_create_data *data) override;
+
     virtual IOReturn setBT_COEX_FLAGS(apple80211_state_data *) override { return kIOReturnUnsupported; }
     virtual IOReturn setROAM(apple80211_sta_roam_data *) override { return kIOReturnUnsupported; }
     virtual IOReturn setHT_CAPABILITY(apple80211_ht_capability *) override { return kIOReturnUnsupported; }
-    virtual IOReturn setAWDL_FORCED_ROAM_CONFIG(apple80211_awdl_forced_roam_config *) override { return kIOReturnUnsupported; }
+    virtual IOReturn setAWDL_FORCED_ROAM_CONFIG(apple80211_awdl_forced_roam_config *data) override {
+        IOLog("AIRPLAY AWDL TRACE: setAWDL_FORCED_ROAM_CONFIG data=%p\n", data);
+        return kIOReturnUnsupported;
+    }
     virtual IOReturn setOFFLOAD_ARP(apple80211_offload_arp_data *) override { return kIOReturnUnsupported; }
     virtual IOReturn setOFFLOAD_NDP(apple80211_offload_ndp_data *) override { return kIOReturnUnsupported; }
     virtual IOReturn setOFFLOAD_SCAN(apple80211_offload_scan_data *) override { return kIOReturnUnsupported; }
@@ -178,7 +222,10 @@ public:
     virtual IOReturn setGAS_SET_PEER(apple80211_gas_peer_t *) override { return kIOReturnUnsupported; }
     virtual IOReturn setVHT_CAPABILITY(apple80211_vht_capability *) override { return kIOReturnUnsupported; }
     virtual IOReturn setROAM_PROFILE(apple80211_roam_profile_band_data *) override { return kIOReturnUnsupported; }
-    virtual IOReturn setAWDL_ENABLE_ROAMING(void *) override { return kIOReturnUnsupported; }
+    virtual IOReturn setAWDL_ENABLE_ROAMING(void *data) override {
+        IOLog("AIRPLAY AWDL TRACE: setAWDL_ENABLE_ROAMING data=%p\n", data);
+        return kIOReturnUnsupported;
+    }
     virtual IOReturn setDBG_GUARD_TIME_PARAMS(apple80211_dbg_guard_time_params *) override { return kIOReturnUnsupported; }
     virtual IOReturn setLEAKY_AP_STATS_MODE(apple80211_leaky_ap_setting *) override { return kIOReturnUnsupported; }
     virtual IOReturn setPRIVATE_MAC(apple80211_private_mac_data *) override { return kIOReturnUnsupported; }
@@ -198,13 +245,68 @@ public:
     virtual IOReturn setHOST_AP_MODE_HIDDEN(apple80211_host_ap_mode_hidden_t *) override { return kIOReturnUnsupported; }
     virtual IOReturn setLQM_CONFIG(apple80211_lqm_config_t *) override { return kIOReturnUnsupported; }
     virtual IOReturn setSOFTAP_PARAMS(apple80211_softap_params *) override { return kIOReturnUnsupported; }
-    virtual IOReturn setSOFTAP_TRIGGER_CSA(apple80211_softap_csa_params *) override { return kIOReturnUnsupported; }
+    virtual IOReturn setSOFTAP_TRIGGER_CSA(apple80211_softap_csa_params *) override {
+        UInt8 value = 1;
+        OSData *data = OSData::withBytes(&value, sizeof(value));
+        if (data != nullptr) {
+            setProperty("AIRPLAYSoftAPCSAEnter", data);
+            data->release();
+        }
+
+        IOLog("AIRPLAY SOFTAP349: ENTER\\n");
+
+        return kIOReturnUnsupported;
+    }
     virtual IOReturn setSOFTAP_WIFI_NETWORK_INFO_IE(apple80211_softap_wifi_network_info *) override { return kIOReturnUnsupported; }
     virtual IOReturn setBTCOEX_DISABLE_ULOFDMA(uint *) override { return kIOReturnUnsupported; }
-    virtual IOReturn setSCAN_CONTROL(apple80211_scan_control_params *) override { return kIOReturnUnsupported; }
+    virtual IOReturn setSCAN_CONTROL(apple80211_scan_control_params *data) override {
+        /*
+         * Sonoma IO80211 SCAN_CONTROL acknowledgement.
+         *
+         * IO80211Family uses this during AWDL / infrastructure
+         * coexistence to control ePNO, roam scans, limited roam,
+         * and scan abort state.
+         *
+         * Intel firmware policy is intentionally unchanged here.
+         * Previously returning kIOReturnUnsupported caused
+         * IO80211Family to repeatedly report scanControl failure.
+         */
+        static volatile UInt32 scanControlHits = 0;
+
+        UInt32 hits = __atomic_add_fetch(
+            &scanControlHits,
+            (UInt32)1,
+            __ATOMIC_RELAXED
+        );
+
+        if (hits <= 32) {
+            setProperty(
+                "AIRPLAYScanControlHits",
+                (unsigned long long)hits,
+                32
+            );
+
+            setProperty(
+                "AIRPLAYScanControlDataNonNull",
+                (unsigned long long)(data != nullptr ? 1 : 0),
+                8
+            );
+
+            setProperty(
+                "AIRPLAYScanControlAcknowledged",
+                (unsigned long long)1,
+                8
+            );
+        }
+
+        return kIOReturnSuccess;
+    }
     virtual IOReturn setUSB_HOST_NOTIFICATION(apple80211_usb_host_notification_data *) override { return kIOReturnUnsupported; }
     virtual IOReturn setSET_MAC_ADDRESS(apple80211_set_mac_address *) override { return kIOReturnUnsupported; }
-    virtual IOReturn setHP2P_CTRL(apple80211_hp2p_ctrl *) override { return kIOReturnUnsupported; }
+    virtual IOReturn setHP2P_CTRL(apple80211_hp2p_ctrl *data) override {
+        IOLog("AIRPLAY P2P TRACE: setHP2P_CTRL data=%p\n", data);
+        return kIOReturnUnsupported;
+    }
     virtual IOReturn setABORT_SCAN(apple80211_abort_scan *) override { return kIOReturnUnsupported; }
     virtual IOReturn setSET_PROPERTY(apple80211_set_property_unserialized_data *) override { return kIOReturnUnsupported; }
     virtual IOReturn setROAM_CACHE_UPDATE(apple80211_roam_cache_data *) override { return kIOReturnUnsupported; }

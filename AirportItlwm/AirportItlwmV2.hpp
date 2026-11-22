@@ -39,6 +39,8 @@ extern "C" {
 const char *convertApple80211IOCTLToString(signed int cmd);
 }
 
+class AirportItlwmAWDLInterface;
+
 class AirportItlwm : public IO80211Controller {
     OSDeclareDefaultStructors(AirportItlwm)
 #define IOCTL(REQ_TYPE, REQ, DATA_TYPE) \
@@ -70,8 +72,35 @@ public:
     virtual IOService* probe(IOService* provider, SInt32* score) override;
     virtual bool start(IOService *provider) override;
     virtual void stop(IOService *provider) override;
+    virtual IO80211VirtualInterface *createVirtualInterface(ether_addr *ether, UInt role) override;
+    virtual bool attachInterface(OSObject *object, IOService *provider) override;
+
+    /*
+     * Diagnostic-only Sonoma V2 TX entry probes.
+     * These override existing IO80211Controller virtual slots and
+     * delegate immediately to Apple's superclass implementation.
+     */
+
+    virtual SInt32 enableVirtualInterface(
+        IO80211VirtualInterface *interface
+    ) override;
+
+    virtual SInt32 disableVirtualInterface(
+        IO80211VirtualInterface *interface
+    ) override;
+
+    virtual void requestPacketTx(void *object, UInt arg) override;
+    virtual int bpfOutputPacket(OSObject *object, UInt dltType, mbuf_t m) override;
+
+    IOReturn probeAWDLInterfaceCreation(apple80211_virt_if_create_data *data);
     virtual IOReturn enable(IO80211SkywalkInterface *netif) override;
     virtual IOReturn disable(IO80211SkywalkInterface *netif) override;
+
+    /* AIRPLAYVMACPROBE: observation only. */
+    virtual SInt32 setVirtualHardwareAddress(
+        IO80211VirtualInterface *interface,
+        ether_addr *address
+    ) override;
     virtual IOReturn setHardwareAddress(const void *addr, UInt32 addrBytes) override;
     virtual IOReturn getHardwareAddress(IOEthernetAddress* addrP) override;
     virtual IOReturn getPacketFilters(const OSSymbol *group, UInt32 *filters) const override;
@@ -99,7 +128,8 @@ public:
                                UInt64                  speed        = 0,
                                OSData *                data         = 0) override;
     static IOReturn setLinkStateGated(OSObject *target, void *arg0, void *arg1, void *arg2, void *arg3);
-    
+    void updateLQMIfChanged();
+
     static IOReturn tsleepHandler(OSObject* owner, void* arg0 = 0, void* arg1 = 0, void* arg2 = 0, void* arg3 = 0);
     static void eventHandler(struct ieee80211com *, int, void *);
     IOReturn enableAdapter(IONetworkInterface *netif);
@@ -126,6 +156,8 @@ public:
     virtual void *getFaultReporterFromDriver() override;
     
     virtual SInt32 apple80211_ioctl(IO80211SkywalkInterface *,unsigned long,void *, bool, bool) override;
+    virtual SInt32 apple80211_ioctl_set(IO80211VirtualInterface *,void *,bool,bool) override;
+    virtual SInt32 apple80211VirtualRequest(UInt,int,IO80211VirtualInterface *,void *) override;
     virtual SInt32 apple80211SkywalkRequest(UInt,int,IO80211SkywalkInterface *,void *) override;
     virtual SInt32 apple80211SkywalkRequest(UInt,int,IO80211SkywalkInterface *,void *,void *) override;
 
@@ -206,6 +238,38 @@ public:
     IO80211SkywalkInterface *fNetIf;
     IOWorkLoop *fWatchdogWorkLoop;
     ItlHalService *fHalService;
+
+    /*
+     * KGP-style AWDL ownership.
+     *
+     * Tahoe keeps fAWDLInterface directly on the controller.
+     * Sonoma uses our AirportItlwmAWDLInterface frontend instead.
+     */
+    AirportItlwmAWDLInterface *fSonomaAWDLInterface = nullptr;
+    bool awdlAddressSyncEnabled();
+    void awdlAddressSyncSet(AirportItlwmAWDLInterface *, ether_addr *);
+    void awdlAddressSyncPoll();
+    void awdlAddressSyncPublish();
+    static IOReturn awdlAddressSyncSetAction(OSObject *, void *, void *, void *, void *);
+    static IOReturn awdlAddressSyncRequestAction(OSObject *, void *, void *, void *, void *);
+    static IOReturn awdlAddressSyncPollAction(OSObject *, void *, void *, void *, void *);
+    static IOReturn awdlAddressSyncDrainAction(OSObject *, void *, void *, void *, void *);
+    AWDLAddressSyncRecord fAddrSync = {};
+    UInt32 fAddrSyncStopping = 0, fAddrSyncGateMisses = 0;
+    bool fAddrSyncHaveRequest = false, fAddrSyncHaveCommit = false;
+    bool fAddrSyncNotifying = false;
+    PeerCacheRequestV1 fPeerCacheRequest = {};
+    PeerCacheCandidateV1 fPeerCacheCandidate = {};
+    UInt32 fPeerCacheGateMisses = 0;
+    IOReturn peerCacheObserve(bool setter, const void *data);
+    static IOReturn peerCacheObserveAction(OSObject *, void *, void *, void *, void *);
+    bool peerCacheCopyCandidate(PeerCacheCandidateV1 *);
+    void peerCacheNativeSample(void *, const void *);
+    static IOReturn peerCacheNativeAction(OSObject *, void *, void *, void *, void *);
+    static IOReturn peerCacheCopyAction(OSObject *, void *, void *, void *, void *);
+
+
+    unsigned long long fLastReportedLQM;
     
     //IO80211
     uint8_t power_state;
