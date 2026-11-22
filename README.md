@@ -1,7 +1,7 @@
 
 # Sonoma ReAWDL Project
 
-### Experimental Intel Wi-Fi Support for Apple Wireless Direct Link (AWDL) on macOS Sonoma
+### Experimental Intel Wi-Fi 6 Support for Apple Wireless Direct Link (AWDL) on macOS Sonoma
 
 ReAWDL is an experimental modification of the [OpenIntelWireless AirportItlwm](https://github.com/OpenIntelWireless/itlwm) driver, primarily developed for the **Intel AX210 Wi-Fi 6E** chipset under macOS Sonoma.
 
@@ -11,7 +11,7 @@ The ultimate objectives included **AirDrop, peer-to-peer AirPlay, native device 
 
 Although complete compatibility was not achieved, the project made substantial progress in driver functionality, packet handling, firmware integration, and stability.
 
-**Latest release:** [ReAWDL v3.5.1 — Releases](https://github.com/maddog860/Sonoma-ReAWDL-Project/releases)
+**Latest release:** [ReAWDL v3.6 — Releases](https://github.com/maddog860/Sonoma-ReAWDL-Project/releases)
 
 **Project Status:** Development concluded. Source code preserved for reference, research, and possible future community contributions.
 
@@ -36,6 +36,9 @@ ReAWDL investigated these requirements using Intel firmware capabilities alongsi
 ---
 
 ## What the Project Achieved
+### WIFI 6 Support
+
+Added Wi-Fi 6 (802.11ax) support for compatible Intel wireless adapters, including HE capability negotiation, 160 MHz channel operation, and MCS/rate handling. Implemented firmware-based transmit-rate reporting, allowing macOS to display Wi-Fi 6 link speeds up to 2,401 Mbps on the Intel AX210. These capabilities work independently of experimental AWDL modifications.
 
 ### Native AWDL Integration
 
