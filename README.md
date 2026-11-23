@@ -153,9 +153,13 @@ The `HEPR1063TlcRaw`, `HEPR1063SingleRaw`, and `HEPR1063BARaw` fields are raw fi
 
 The project is best understood as an enhanced experimental Intel Wi-Fi driver with optional AWDL research functionality—not a finished AirDrop implementation.
 
-## Included Utility — `intel_wifi_hardware_firmware.py`
+## Included Utility — intel_wifi_hardware_firmware.py
 
 The read-only macOS Python utility reports the Intel adapter model, loaded firmware, negotiated wireless standard, operating channel and bandwidth, and available PHY link-rate information. It is intended to describe actual observed operating capabilities rather than theoretical marketing specifications. It avoids displaying personal directory paths, Wi-Fi network names, and MAC addresses, and can include additional ReAWDL diagnostics when available.
+
+## Included Utility — ReAWDL-P2P-Activity.zip
+
+The included macOS Python diagnostic scripts expose ReAWDL's underlying peer-to-peer (P2P) and AWDL activity using information already available from the running driver. They are intended to help users observe the experimental wireless machinery, including firmware session activity, scheduling, and packet-handling diagnostics where available, without installing or rebuilding a new kext. The utilities provide insight into the project's internal functionality and development progress, while distinguishing observed driver activity from fully operational AirDrop transfers or complete peer-to-peer connectivity.
 
 ## Future Development
 
