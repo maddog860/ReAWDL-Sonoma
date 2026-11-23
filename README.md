@@ -164,13 +164,15 @@ Active development of new AWDL/AirDrop features remains paused. Existing experim
 
 ## Credits & Acknowledgments
 
-## Credits & Acknowledgments
+BringBackPhysicalMedia / Maddog860 — Project direction, extensive testing, experimental design, troubleshooting, performance evaluation, and validation of driver changes.
 
-**[BringBackPhysicalMedia / Maddog860](https://github.com/maddog860)** — Project direction, extensive testing, experimental design, troubleshooting, performance evaluation, and validation of driver changes.
-**[KGP (kgp-macPro)](https://github.com/kgp-macPro)** — Intel driver engineering references that informed improvements involving DMA buffer mapping, packet ownership and cleanup, deferred queue recovery, firmware command lifetimes, reset safeguards, and Apple-compatible peer-to-peer interface lifecycle management.
-**[OpenIntelWireless — itlwm / AirportItlwm](https://github.com/OpenIntelWireless/itlwm)** — The original AirportItlwm project and its contributors provided the foundational Intel Wi-Fi driver on which ReAWDL was developed.
-**[Linux AirDrop Project — airdrop-mt7921](https://github.com/jedbillyb/airdrop-mt7921)** — Protocol research that informed investigations of AWDL MAC identity synchronization, peer-to-peer operation, radio channel alignment, synchronization timing, and the distinction between peer discovery and successful data transfer. Its implementation targets MediaTek hardware rather than Intel.
-**Artificial Intelligence — AI-assisted Development** — AI coding assistants contributed substantial experimental project-specific code, tooling, source analysis, debugging support, firmware research, and documentation. Human-directed testing, observations, and engineering decisions guided the work.
+KGP (kgp-macPro) — Intel driver engineering references that informed improvements involving DMA buffer mapping, packet ownership and cleanup, deferred queue recovery, firmware command lifetimes, reset safeguards, and Apple-compatible peer-to-peer interface lifecycle management.
+
+OpenIntelWireless — itlwm / AirportItlwm — The original AirportItlwm project and its contributors provided the foundational Intel Wi-Fi driver on which ReAWDL was developed.
+
+Linux AirDrop Project — airdrop-mt7921 — Protocol research that informed investigations of AWDL MAC identity synchronization, peer-to-peer operation, radio channel alignment, synchronization timing, and the distinction between peer discovery and successful data transfer. Its implementation targets MediaTek hardware rather than Intel.
+
+Artificial Intelligence — AI-assisted Development — AI coding assistants contributed substantial experimental project-specific code, tooling, source analysis, debugging support, firmware research, and documentation. Human-directed testing, observations, and engineering decisions guided the work.
 
 ## Closing Notes
 
