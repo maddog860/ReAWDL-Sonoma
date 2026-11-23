@@ -1,4 +1,4 @@
-# ReAWDL v3.6
+# ReAWDL v3.6.1
 
 **Intel AX210 — Enhanced Wi-Fi 6, freshness-aware PHY-rate reporting, and experimental native AWDL for macOS Sonoma**
 
@@ -8,11 +8,11 @@
 
 ReAWDL is an experimental modification of AirportItlwm, originally developed to investigate native Apple Wireless Direct Link (AWDL) support on Intel wireless hardware. Extensive work on firmware integration, peer discovery, packet handling, and driver reliability also created opportunities to improve ordinary infrastructure Wi-Fi.
 
-**ReAWDL v3.6 now emphasizes everyday Wi-Fi 6 performance, reliable connectivity, and trustworthy link-rate reporting.** The HE-PR1063 through HE-PR1065 development sequence added independent Intel firmware-rate diagnostics and a runtime-tested freshness-aware display path. The follow-on HE-PR1066 source revision makes freshness-aware reporting the default, with detailed diagnostic data remaining optional. These changes build on the existing 802.11ax improvements without modifying Intel's firmware rate-control decisions.
+**ReAWDL v3.6.1 emphasizes everyday Wi-Fi 6 performance, reliable connectivity, and trustworthy link-rate reporting.** The HE-PR1063 through HE-PR1065 development sequence added independent Intel firmware-rate diagnostics and a runtime-tested freshness-aware display path. The follow-on HE-PR1066 source revision makes freshness-aware reporting the default, with detailed diagnostic data remaining optional. These changes build on the existing 802.11ax improvements without modifying Intel's firmware rate-control decisions.
 
 Active development of new AirDrop/AWDL functionality is paused for the foreseeable future. Existing experimental AWDL functionality and previous reliability improvements remain in the project.
 
-## What's New in v3.6 — November Wi-Fi 6 Update
+## What's New in v3.6.1 — November Wi-Fi 6 Update
 
 ### Native 802.11ax connectivity and HE rate decoding
 
@@ -51,11 +51,11 @@ HE-PR1065 corrects that mismatch by updating the separate `getMCS()` entry point
 
 ### HE-PR1066 — Freshness reporting built in
 
-For the next release build, the freshness fix is now **default-on in source** for supported Intel AX210 infrastructure connections using 802.11ax, in both Debug and Release configurations. It no longer requires `-itlwm-hefresh` or the diagnostic `-itlwm-herate` boot flag to collect the compact successful-TX evidence used for reporting. The code retains the three-second sample validity window, connection-generation and channel-width checks, and TLC fallback when recent completed-TX evidence is absent. **No firmware TX-rate-control behavior is changed.**
+In v3.6.1, the freshness fix is **default-on in source** for supported Intel AX210 infrastructure connections using 802.11ax, in both Debug and Release configurations. It no longer requires `-itlwm-hefresh` or the diagnostic `-itlwm-herate` boot flag to collect the compact successful-TX evidence used for reporting. The code retains the three-second sample validity window, connection-generation and channel-width checks, and TLC fallback when recent completed-TX evidence is absent. **No firmware TX-rate-control behavior is changed.**
 
 The detailed firmware witness/IORegistry data is still optional in compatible Debug builds via `-itlwm-herate`. A new rollback flag, **`-itlwm-hefreshoff`**, disables freshness-aware reporting and restores TLC-only reporting in HE-PR1066 builds. The earlier `-itlwm-hefresh` flag was required in HE-PR1064/1065 but is unnecessary in HE-PR1066.
 
-**Release status:** The complete HE-PR1066 source passed **21/21 structural checks**, **13/13 policy tests**, and **Sonoma14.4 Debug compilation** on the developer’s Mac. The independent eight-file `wifi6-he-fix` adaptation also passed **23/23 source checks**, **13/13 policy tests**, **12/12 decoder tests**, and a standalone Sonoma14.4 Debug compilation; it was published as commit `38a9bb4`. HE-PR1065 has the clearest documented on-device rate-reporting observations. Independent runtime testing of the standalone patch and a Release-build validation are still pending.
+**Release status:** The complete HE-PR1066 source passed **21/21 structural checks**, **13/13 policy tests**, and **Sonoma14.4 Debug compilation** on the developer’s Mac. The independent eight-file `wifi6-he-fix` adaptation also passed **23/23 source checks**, **13/13 policy tests**, **12/12 decoder tests**, and a standalone Sonoma14.4 Debug compilation; it was published as commit `38a9bb4`. HE-PR1065 has the clearest documented on-device rate-reporting observations. Independent runtime testing of the standalone patch and a Release-build validation are still pending. The full HE-PR1066 source was published to the project master branch as commit `220e258`, with the generated firmware source excluded from version control.
 
 ## Performance and Validation
 
