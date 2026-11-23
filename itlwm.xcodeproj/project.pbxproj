@@ -21,6 +21,7 @@
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
+		BEE3D992FFE2DBD49D48729E /* AirportItlwmAWDLInterface.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 511C347F435D4163DFD089A8 /* AirportItlwmAWDLInterface.cpp */; };
 		024A07B023FCBC3C009FBA6C /* itlwm.hpp in Headers */ = {isa = PBXBuildFile; fileRef = 024A07AF23FCBC3C009FBA6C /* itlwm.hpp */; };
 		024A07B223FCBC3C009FBA6C /* itlwm.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 024A07B123FCBC3C009FBA6C /* itlwm.cpp */; };
 		024A082E23FCBC6C009FBA6C /* aes.c in Sources */ = {isa = PBXBuildFile; fileRef = 024A07C923FCBC6C009FBA6C /* aes.c */; };
@@ -991,6 +992,7 @@
 		F8F92586240974EF0088B8D5 /* types.h in Headers */ = {isa = PBXBuildFile; fileRef = F8F9257B240974EF0088B8D5 /* types.h */; };
 		F8F9EDE1240B7415009CB8E7 /* _task.cpp in Sources */ = {isa = PBXBuildFile; fileRef = F8F9EDE0240B7415009CB8E7 /* _task.cpp */; };
 		F8FA0EEC2501E7EE00B1822E /* zutil.h in Headers */ = {isa = PBXBuildFile; fileRef = F8FA0EEB2501E7EE00B1822E /* zutil.h */; };
+		61854B7EA57F194145C3A9B7 /* AirportItlwmVIFBridge.cpp in Sources */ = {isa = PBXBuildFile; fileRef = DFCC1AFABA1D66F47DF81DE3 /* AirportItlwmVIFBridge.cpp */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -1060,6 +1062,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		511C347F435D4163DFD089A8 /* AirportItlwmAWDLInterface.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AirportItlwm/AirportItlwmAWDLInterface.cpp; sourceTree = SOURCE_ROOT; };
 		024A07AC23FCBC3C009FBA6C /* itlwm.kext */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = itlwm.kext; sourceTree = BUILT_PRODUCTS_DIR; };
 		024A07AF23FCBC3C009FBA6C /* itlwm.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = itlwm.hpp; sourceTree = "<group>"; };
 		024A07B123FCBC3C009FBA6C /* itlwm.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = itlwm.cpp; sourceTree = "<group>"; };
@@ -1305,6 +1308,7 @@
 		F8F9EDE0240B7415009CB8E7 /* _task.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = _task.cpp; sourceTree = "<group>"; };
 		F8FA0EEB2501E7EE00B1822E /* zutil.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = zutil.h; sourceTree = "<group>"; };
 		F8FA0EED2501E8C100B1822E /* zutil.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = zutil.c; sourceTree = "<group>"; };
+		DFCC1AFABA1D66F47DF81DE3 /* AirportItlwmVIFBridge.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = AirportItlwm/AirportItlwmVIFBridge.cpp; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -3199,6 +3203,8 @@
 				F8D94CEC2B9ABFE20081A3C4 /* scan.cpp in Sources */,
 				F8D94CED2B9ABFE20081A3C4 /* IOPCIEDeviceWrapper.cpp in Sources */,
 				F8D94CEE2B9ABFE20081A3C4 /* ItlIwm.cpp in Sources */,
+				BEE3D992FFE2DBD49D48729E /* AirportItlwmAWDLInterface.cpp in Sources */,				61854B7EA57F194145C3A9B7 /* AirportItlwmVIFBridge.cpp in Sources */,
+
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

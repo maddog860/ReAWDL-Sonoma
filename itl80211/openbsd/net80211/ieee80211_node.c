@@ -69,6 +69,8 @@
 #include <net80211/ieee80211_var.h>
 #include <net80211/ieee80211_priv.h>
 
+struct ieee80211_joinstats ieee80211_js;
+
 struct ieee80211_node *ieee80211_node_alloc(struct ieee80211com *);
 void ieee80211_node_free(struct ieee80211com *, struct ieee80211_node *);
 void ieee80211_node_copy(struct ieee80211com *, struct ieee80211_node *,
@@ -1329,7 +1331,15 @@ ieee80211_node_choose_bss(struct ieee80211com *ic, int bgscan,
     
     for (; ni != NULL; ni = nextbs) {
         nextbs = RB_NEXT(ieee80211_tree, &ic->ic_tree, ni);
+        int jsDesired = (ic->ic_des_esslen != 0 &&
+                         ni->ni_esslen == ic->ic_des_esslen &&
+                         memcmp(ni->ni_essid, ic->ic_des_essid,
+                                ic->ic_des_esslen) == 0);
+        if (jsDesired)
+            IEEE80211_JOINSTAT(desiredSeen);
         if (ni->ni_fails) {
+            if (jsDesired)
+                IEEE80211_JOINSTAT(desiredSkippedFails);
             /*
              * The configuration of the access points may change
              * during my scan.  So delete the entry for the AP
@@ -1346,6 +1356,10 @@ ieee80211_node_choose_bss(struct ieee80211com *ic, int bgscan,
         
         int fail = ieee80211_match_bss(ic, ni, bgscan);
         if (fail != 0) {
+            if (jsDesired) {
+                IEEE80211_JOINSTAT(desiredMatchFail);
+                ieee80211_js.desiredLastFailBits = (u_int32_t)fail;
+            }
             DPRINTF(("%s ieee80211_match_bss==FALSE, ssid=%s, bssid=%s, %d\n", __FUNCTION__, ni->ni_essid, ether_sprintf(ni->ni_bssid), fail));
             continue;
         }
@@ -1402,7 +1416,11 @@ ieee80211_end_scan(struct _ifnet *ifp)
                   ic->ic_state == IEEE80211_S_RUN);
     int roamscan = bgscan &&
                 (ic->ic_flags & IEEE80211_F_DISABLE_BG_AUTO_CONNECT) == 0;
-    
+
+    IEEE80211_JOINSTAT(endScanCalls);
+    if (bgscan)
+        IEEE80211_JOINSTAT(endScanBg);
+
     if (ic->ic_event_handler)
         (*ic->ic_event_handler)(ic, IEEE80211_EVT_SCAN_DONE, NULL);
     
@@ -1450,6 +1468,7 @@ ieee80211_end_scan(struct _ifnet *ifp)
     }
 #endif
     if (ni == NULL) {
+        IEEE80211_JOINSTAT(endScanEmptyTree);
         DPRINTF(("no scan candidate\n"));
     notfound:
         
@@ -1564,9 +1583,16 @@ ieee80211_end_scan(struct _ifnet *ifp)
         ic->ic_bss->ni_unref_cb = ieee80211_node_switch_bss;
         /* F_BGSCAN flag gets cleared in ieee80211_node_join_bss(). */
         return;
-    } else if (selbs == NULL)
+    } else if (selbs == NULL) {
+        IEEE80211_JOINSTAT(endScanNoCandidate);
         goto notfound;
-    
+    }
+
+    IEEE80211_JOINSTAT(endScanJoinBss);
+    if (ic->ic_des_esslen != 0 &&
+        selbs->ni_esslen == ic->ic_des_esslen &&
+        memcmp(selbs->ni_essid, ic->ic_des_essid, ic->ic_des_esslen) == 0)
+        IEEE80211_JOINSTAT(endScanJoinDesired);
     ieee80211_node_join_bss(ic, selbs);
 }
 
@@ -2793,11 +2819,24 @@ ieee80211_setup_hecaps(struct ieee80211_node *ni, const uint8_t *data,
     struct ieee80211_he_cap_elem *he_cap_ie_elem = (struct ieee80211_he_cap_elem *)data;
     uint8_t mcs_nss_size, he_ppe_size, he_total_size;
     
+    if (len < sizeof(ni->ni_he_cap_elem))
+        return;
+
     mcs_nss_size = ieee80211_he_mcs_nss_size(he_cap_ie_elem);
-    he_ppe_size =
-        ieee80211_he_ppe_size(data[sizeof(ni->ni_he_cap_elem) +
-                        mcs_nss_size],
-                      he_cap_ie_elem->phy_cap_info);
+    if (len < sizeof(ni->ni_he_cap_elem) + mcs_nss_size) {
+        return;
+    }
+
+    he_ppe_size = 0;
+    if (he_cap_ie_elem->phy_cap_info[6] &
+        IEEE80211_HE_PHY_CAP6_PPE_THRESHOLD_PRESENT) {
+        if (len <= sizeof(ni->ni_he_cap_elem) + mcs_nss_size)
+            return;
+        he_ppe_size =
+            ieee80211_he_ppe_size(data[sizeof(ni->ni_he_cap_elem) +
+                            mcs_nss_size],
+                          he_cap_ie_elem->phy_cap_info);
+    }
     he_total_size = sizeof(ni->ni_he_cap_elem) + mcs_nss_size +
             he_ppe_size;
     
@@ -2823,8 +2862,14 @@ ieee80211_setup_heop(struct ieee80211_node *ni, const uint8_t *data,
                      uint8_t len)
 {
     struct ieee80211_he_operation *he_op_ie = (struct ieee80211_he_operation *)data;
+    uint8_t fixed_len = __offsetof(struct ieee80211_he_operation, optional);
+    uint32_t params;
+
+    if (len < fixed_len)
+        return 0;
     
-    ni->ni_he_oper_params = le32toh(he_op_ie->he_oper_params);
+    params = le32toh(he_op_ie->he_oper_params);
+    ni->ni_he_oper_params = params;
     ni->ni_he_oper_nss_set = le16toh(he_op_ie->he_mcs_nss_set);
     bzero(&ni->ni_he_optional, sizeof(ni->ni_he_optional));
     if (len > __offsetof(struct ieee80211_he_operation, optional)) {

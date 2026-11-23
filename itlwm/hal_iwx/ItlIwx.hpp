@@ -138,6 +138,8 @@
 #include <IOKit/IOFilterInterruptEventSource.h>
 
 #include <HAL/ItlHalService.hpp>
+#include <HAL/AWDLAddressSync.hpp>
+#include <HAL/PeerCacheProbeV1.hpp>
 #include <HAL/ItlDriverInfo.hpp>
 #include <HAL/ItlDriverController.hpp>
 
@@ -169,6 +171,41 @@ public:
     virtual bool is5GBandSupport() override;
     
     virtual int getTxNSS() override;
+    virtual bool getFirmwareTxRateMbps(uint32_t *outMbps) override;
+    virtual bool getFirmwareTxMcs(uint32_t *outMcs) override;
+    bool selectFirmwareHeReportingRate(uint32_t *outRate);
+
+    /* Read-only firmware TLC rate reporting; never used for TX decisions. */
+    uint32_t fwHeRateFlags_ = 0;
+    /* HE-PR1066: compact, always-available freshness sample (Debug/Release).
+     * No new firmware commands or TX-rate decisions; private to reporting.
+     */
+    uint32_t heProbeEpoch_ = 0;
+    uint32_t heProbeSingleRaw_ = 0;
+    uint32_t heProbeSingleGeneration_ = 0;
+    uint64_t heProbeSingleTimeAbs_ = 0;
+    uint32_t heProbeSingleEpoch_ = 0;
+    uint32_t heFreshLastSource_ = 0; /* 0=TLC fallback, 1=fresh single TX */
+    uint32_t heFreshLastMbps_ = 0;
+    uint32_t heFreshUseCount_ = 0;
+    uint32_t heFreshFallbackCount_ = 0;
+#ifdef DEBUG
+    /* HE-PR1063: optional, read-only, per-device firmware diagnostic data. */
+    uint32_t heProbeTlcCount_ = 0;
+    uint32_t heProbeTlcRaw_ = 0;
+    uint32_t heProbeTlcGeneration_ = 0;
+    uint32_t heProbeBACount_ = 0;
+    uint32_t heProbeBARaw_ = 0;
+    uint32_t heProbeBATxed_ = 0;
+    uint32_t heProbeBADone_ = 0;
+    uint32_t heProbeBAGeneration_ = 0;
+    uint32_t heProbeSingleCount_ = 0;
+    uint32_t heProbeStartCalls_ = 0;
+    uint32_t heProbePublishedEpoch_ = 0xffffffffU;
+    uint32_t heProbePublishedTlc_ = 0xffffffffU;
+    uint32_t heProbePublishedBA_ = 0xffffffffU;
+    uint32_t heProbePublishedSingle_ = 0xffffffffU;
+#endif
     
     virtual const char *getFirmwareName() override;
     
@@ -259,12 +296,12 @@ public:
     void    iwx_clear_persistence_bit(struct iwx_softc *);
     void    iwx_apm_config(struct iwx_softc *);
     int    iwx_apm_init(struct iwx_softc *);
-    void    iwx_apm_stop(struct iwx_softc *);
+    bool    iwx_apm_stop(struct iwx_softc *);
     int    iwx_allow_mcast(struct iwx_softc *);
     void    iwx_init_msix_hw(struct iwx_softc *);
     void    iwx_conf_msix_hw(struct iwx_softc *, int);
     int    iwx_start_hw(struct iwx_softc *);
-    void    iwx_stop_device(struct iwx_softc *);
+    void    iwx_stop_device(struct iwx_softc *, unsigned origin2J = 0);
     void    iwx_nic_config(struct iwx_softc *);
     int    iwx_nic_rx_init(struct iwx_softc *);
     int    iwx_nic_init(struct iwx_softc *);
@@ -288,6 +325,22 @@ public:
     int    iwx_mimo_enabled(struct iwx_softc *);
     static void    iwx_mac_ctxt_task(void *);
     static void    iwx_chan_ctxt_task(void *);
+
+    /*
+     * AIRPLAY: queue a short P2P discovery session onto the
+     * Intel driver's own task queue.
+     */
+    bool iwx_airplay_queue_p2p_session();
+    void iwx_airplay_psf_tx(struct iwx_softc *sc); /* PSFTX-20261015 */
+    int iwx_awdl_probe_p2p_mac(const uint8_t *addr, uint32_t action = 1 /* IWX_FW_CTXT_ACTION_ADD */);
+    void iwx_awdl_p2p_mac_follow(struct iwx_softc *sc); /* MACFOLLOW-20261015 */
+    int awdlAddressSyncSnapshot(AWDLAddressSyncSnapshot *out);
+    void iwx_peer_cache_probe(struct iwx_softc *sc);
+    void iwx_peer_cache_probe_publish(struct iwx_softc *sc, bool force);
+    PeerStationProbeV1 fPeerProbe = {};
+    uint64_t fPeerProbeLastPublishSecond = 0;
+    static void iwx_awdl_p2p_session_task(void *);
+    static void iwx_airplay_p2p_rearm_timeout(void *); /* P2PGATE */
     static void    iwx_updateprot(struct ieee80211com *);
     static void    iwx_updateslot(struct ieee80211com *);
     static void    iwx_updateedca(struct ieee80211com *);
@@ -340,7 +393,7 @@ public:
             struct iwx_tx_data *);
     void iwx_txd_done(struct iwx_softc *sc, struct iwx_tx_data *txd);
     void iwx_clear_oactive(struct iwx_softc *sc, struct iwx_tx_ring *ring);
-    void iwx_ampdu_txq_advance(struct iwx_softc *sc, struct iwx_tx_ring *ring, int idx);
+    void iwx_ampdu_txq_advance(struct iwx_softc *sc, struct iwx_tx_ring *ring, int idx, bool normalCompletion2I = false);
     void iwx_rx_tx_ba_notif(struct iwx_softc *sc, struct iwx_rx_packet *pkt, struct iwx_rx_data *data);
     void    iwx_rx_tx_cmd(struct iwx_softc *, struct iwx_rx_packet *,
             struct iwx_rx_data *);
@@ -446,7 +499,7 @@ public:
     int    iwx_init_hw(struct iwx_softc *);
     int    iwx_init(struct _ifnet *);
     static void    iwx_start(struct _ifnet *);
-    void    iwx_stop(struct _ifnet *);
+    void    iwx_stop(struct _ifnet *, unsigned origin2J = 0);
     static void    iwx_watchdog(struct _ifnet *);
     static int    iwx_ioctl(struct _ifnet *, u_long, caddr_t);
     const char *iwx_desc_lookup(uint32_t);
@@ -482,6 +535,171 @@ public:
     IOInterruptEventSource* fInterrupt;
     struct pci_attach_args pci;
     struct iwx_softc com;
+
+    // 2F: appended local diagnostic storage; no base/com offsets or vtable changes.
+    struct Alive2FData {
+        uint32_t word[60];
+        uint64_t address[11];
+    } fAlive2F = {};
+    static_assert(sizeof(Alive2FData) == 328, "2F wire schema size");
+    uint32_t fAlive2FEvents[12] = {};
+    uint32_t fAlive2FPhase = 0;
+    thread_t fAlive2FOwner = nullptr;
+    bool alive2FOwned() const;
+    void alive2FStep(uint32_t stage);
+    int alive2FResult(uint32_t stage, int result);
+    void alive2FEvent(unsigned index);
+    void alive2FSnapshot(unsigned offset);
+    uint16_t alive2FStatus(uint16_t status);
+    void alive2FTerminal(IOPCIDevice *provider, bool attached);
+    struct Rx2GRecord { uint32_t word[32]; uint64_t address[2]; };
+    struct Rx2GData { uint32_t header[4]; Rx2GRecord record[16]; };
+    static_assert(sizeof(Rx2GRecord) == 144 && sizeof(Rx2GData) == 2320, "2G RX wire layout");
+    Rx2GData fRx2GLive = {}, fRx2GWire = {};
+    uint32_t fRx2GTotal = 0, fRx2GHw = 0;
+    uint64_t fTime2G[16] = {};
+    static uint64_t time2GNow();
+    void time2GMark(unsigned index);
+    int rx2GBegin(struct iwx_softc *, struct iwx_rx_data *, mbuf_t);
+    void rx2GHeader(int, struct iwx_rx_packet *, uint32_t, int);
+    void rx2GWord(int, unsigned, uint32_t);
+    void rx2GFinish(int, uint32_t);
+    void rx2GSnapshot();
+    // 2H mapped packet backing uses the same iwx_dma_info ownership representation
+    // as persistent ring DMA. RX slot policy is separate from future TX/command policy.
+    // 2I: ordinary TX only. Tokens fit pre-existing iwx_tx_data tail padding.
+    enum { kTx2ICount = 1024, kTx2ISize = 8192 };
+    enum { Tx2IEmpty = 0, Tx2IFree, Tx2ICopying, Tx2IInflight, Tx2IQuarantined };
+    struct Tx2IBacking {
+        struct iwx_dma_info dma;
+        struct iwx_tx_data *owner;
+        uint32_t state;
+        uint32_t length;
+    } fTx2I[kTx2ICount] = {};
+    uint32_t fTx2IStats[32] = {};
+    uint64_t fTx2IFirst[4] = {};
+    uint32_t fTx2INext = 0;
+    uint32_t fTx2IBlocked = 0;
+    uint32_t fTx2IReady = 0;
+    bool tx2IAllocate();
+    void tx2IError(unsigned, unsigned, uint32_t);
+    void tx2IReport(unsigned);
+    int tx2IPrepare(struct iwx_tx_data *, mbuf_t, int, int, IOPhysicalSegment *);
+    void tx2IPublished(struct iwx_tx_data *);
+    void tx2IRetire(struct iwx_tx_data *, bool);
+    // One atomic word serializes admission with nested stop windows. Low 16
+    // bits count active iwx_tx calls; bits 16..30 count stop scopes; bit 31
+    // remains closed for an unresolved ownership boundary. No waiting/lock.
+    enum : uint32_t { kTx2JStop = 0x10000U, kTx2JClosed = 0x80000000U };
+    uint32_t fTx2JAdmission = 0;
+    bool tx2JEnter();
+    void tx2JLeave();
+    bool tx2IStop(unsigned);
+    void tx2JStopEnd(bool, unsigned);
+    struct Tx2JScope {
+        ItlIwx *owner;
+        ~Tx2JScope() { if (owner) owner->tx2JLeave(); }
+    };
+    struct Flow2JRecord {
+        uint64_t ns;
+        uint32_t event, code, a, b, c, status;
+        uint64_t address, extra;
+    };
+    struct Flow2JData {
+        uint32_t schema, capacity, count, dropped, snapshots, failures, overflow, firstValid;
+        Flow2JRecord firstFailure;
+        Flow2JRecord records[128];
+    } fFlow2J = {};
+    uint32_t fFlow2JBusy = 0, fFlow2JDropped = 0;
+    static_assert(sizeof(Flow2JRecord) == 48 && sizeof(Flow2JData) == 6224, "2J wire layout");
+    void flow2J(unsigned, unsigned, uint32_t = 0, uint32_t = 0, uint32_t = 0,
+                uint32_t = 0, uint64_t = 0, uint64_t = 0);
+    void flow2JPublish();
+    void tx2IFree();
+
+    // 2L observes only the unresolved management queue -> gated drain -> TX path.
+    struct Start2LContext { bool entered; uint32_t reason; };
+    struct Path2LRecord {
+        uint64_t ns;
+        uint32_t event, result, state, ifflags, driverflags, qfull;
+        uint32_t mgtlen, mgtdrops, qid, ringcount, ringqueued;
+        uint32_t blocked, oactive, generation, detail, fc0;
+    };
+    struct Path2LData {
+        uint32_t word[32];
+        Path2LRecord firstAttempt, firstFailure, firstTx, latest;
+    } fPath2L = {};
+    static_assert(sizeof(Path2LRecord) == 72 && sizeof(Path2LData) == 416, "2L wire layout");
+    uint32_t fPath2LBusy = 0, fPath2LDropped = 0;
+    void path2L(unsigned event, uint32_t result = 0, uint32_t detail = 0, uint32_t fc0 = 0);
+    void path2LPublish();
+
+    // 2M: a coalesced software event on the SAME workloop as mainCommandGate.
+    // The lock protects event lifetime/signalling only; never held across gates.
+    IOSimpleLock *fDrain2MLock = nullptr;
+    IOInterruptEventSource *fDrain2MEvent = nullptr;
+    bool fDrain2MPending = false, fDrain2MPaused = true, fDrain2MClosed = false;
+    uint32_t fDrain2MEpoch = 0;
+    uint32_t fDrain2MStats[24] = {}, fDrain2MWire[24] = {};
+    bool drain2MSetup();
+    void drain2MRequest();
+    uint32_t drain2MPause();
+    void drain2MArm(uint32_t);
+    void drain2MRemove();
+    static IOReturn drain2MFence(OSObject *, void *, void *, void *, void *);
+    static void drain2MAction(OSObject *, IOInterruptEventSource *, int);
+
+    enum { kCmd2KCount = IWX_CMD_QUEUE_SIZE_GEN3, kCmd2KSize = 4096 };
+    enum { Cmd2KFree = 0, Cmd2KCopying, Cmd2KInflight, Cmd2KCompleting, Cmd2KDone, Cmd2KQuarantined };
+    struct Cmd2KBacking {
+        iwx_dma_info dma;
+        uint32_t state, serial, code, generation, callerDone, length;
+        mbuf_t packet;
+        uint64_t observedAddress;
+    } fCmd2K[kCmd2KCount] = {};
+    uint32_t fCmd2KFrozen = 0, fCmd2KResetDepth = 0, fCmd2KEpoch = 0;
+    uint32_t fCmd2KStats[32] = {};
+    uint64_t fCmd2KFirst[8] = {}, fCmd2KLast[8] = {};
+    uint32_t fCmd2KDiagBusy = 0;
+    bool cmd2KAvailable(unsigned);
+    bool cmd2KClaim(unsigned, uint32_t, uint32_t, uint32_t, uint32_t *);
+    int cmd2KPrepare(unsigned, uint32_t, uint32_t, mbuf_t, size_t, iwx_tx_data *, bool *, uint64_t *, void **);
+    void cmd2KFinish(unsigned, uint32_t, bool, int);
+    int cmd2KDone(unsigned, int, iwx_tx_data *);
+    void cmd2KDoneEnd(unsigned);
+    void cmd2KResetBegin();
+    void cmd2KResetEnd();
+    void cmd2KQuarantine(unsigned);
+    void cmd2KThawAfterPositiveReset(); /* CMDTHAW-20261105 */
+    void cmd2KError(unsigned, unsigned, uint32_t);
+    void cmd2KObserve(unsigned, unsigned, uint32_t = 0);
+    void cmd2KReport(unsigned);
+    void cmd2KFree();
+
+    struct iwx_dma_info fRxBacking2H[IWX_RX_MQ_RING_COUNT] = {};
+    uint32_t fRxMap2H[16] = {}, fRxMapWire2H[16] = {};
+    uint64_t fDetach2H[10] = {};
+    void rx2HError(unsigned, unsigned, IOReturn);
+    bool rx2HAllocate(unsigned);
+    bool rx2HCopy(unsigned, mbuf_t);
+
+    // PC1 control is serialized by the existing main workloop, not a new worker.
+    struct Pc1Advance { iwx_tx_ring *ring; int index; unsigned generation; };
+    uint32_t fPc1ResetEpoch=0, fPc1TerminalEpoch=0, fPc1ExpectedGeneration=0;
+    uint32_t fPc1LastMaster=0, fPc1Fault=0, fPc1Recoveries=0, fPc1QuarantineCount=0;
+    uint32_t fPc1Suspended=0, fPc1DroppedCompletion=0, fPc1StaleFlush=0;
+    uint32_t fPc1LastRefusal=0, fPc1PublishFailures=0, fPc1Snapshots=0;
+    void pc1Report();
+    static IOReturn pc1StopAction(OSObject *,void *,void *,void *,void *);
+    static IOReturn pc1RingAction(OSObject *,void *,void *,void *,void *);
+    static IOReturn pc1TvqmV37CommitAction(OSObject *,void *,void *,void *,void *);
+    static IOReturn pc1AdvanceAction(OSObject *,void *,void *,void *,void *);
+    static IOReturn pc1StopEndAction(OSObject *,void *,void *,void *,void *);
+    static IOReturn pc1RecoverAction(OSObject *,void *,void *,void *,void *);
+
+
+
+
 };
 
 #endif

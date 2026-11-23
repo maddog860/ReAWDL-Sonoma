@@ -14,6 +14,69 @@
 #include <net80211/ieee80211_ioctl.h>
 #include <net80211/ieee80211_priv.h>
 
+/* REGFIX: request-side join counters (ioreg AIRPLAYJOIN*). */
+static volatile UInt32 gJoinReq = 0;
+static volatile UInt32 gJoinReqSAE = 0;
+static volatile UInt32 gJoinReqPSK = 0;
+static volatile UInt32 gJoinHandshakeReassocSkipped = 0;
+static volatile UInt32 gJoinDisassocMidJoinIgnored = 0;
+static volatile UInt32 gJoinDisassocDuplicateIgnored = 0; /* DISASSOCFIX */
+static volatile UInt32 gJoinDisassocDuringJoin = 0;      /* DISASSOCFIX */
+#ifndef LINK_STATE_DOWN
+#define LINK_STATE_DOWN 2   /* sys/_if_ether.h */
+#endif
+/* SEQFIX state + counters (gSeq* without static are shared with AirportItlwmV2.cpp) */
+volatile UInt32 gSeqVoluntaryDown = 0;   /* next link-down is one macOS asked for */
+volatile UInt32 gSeqJoinInFlight = 0;    /* join requested, link not up yet */
+volatile UInt32 gSeqStaleLinkDown = 0;   /* bumped in AirportItlwmV2::setLinkStatus */
+volatile uint64_t gSeqDisassocStampMs = 0; /* SEQFIX probes: airport_up_time() stamps */
+volatile uint64_t gSeqAssocStampMs = 0;
+static volatile UInt32 gSeqDisassocSyncDown = 0;
+static volatile UInt32 gSeqAssocSyncDown = 0;
+static volatile UInt32 gSeqAssocDuringTeardown = 0;
+static volatile UInt32 gSeqDownVolReads = 0;
+static volatile UInt32 gSeqDownInvolReads = 0;
+static volatile UInt32 gSeqScanRejectInit = 0;
+static volatile UInt32 gScanGuardRejectWrapping = 0; /* SCANGUARD */
+static volatile UInt32 gScanHealReset = 0;     /* SCANHEAL-20261017 */
+static volatile uint64_t gScanWrapSetMs = 0;   /* SCANHEAL-20261017: airport_up_time() ms when latch set */
+static volatile UInt32 gJoinPtkOK = 0;
+static volatile UInt32 gJoinPtkLenMismatch = 0;
+static volatile UInt32 gJoinPtkSetFail = 0;
+static volatile UInt32 gJoinGtkOK = 0;
+static volatile UInt32 gJoinGtkLenMismatch = 0;
+static volatile UInt32 gJoinGtkSetFail = 0;
+
+/*
+ * Bitmask of the 00-0F-AC AKM suite types in an RSN IE:
+ * bit 2 = PSK, bit 6 = PSK-SHA256, bit 8 = SAE, bit 4 = FT-PSK, bit 9 = FT-SAE.
+ */
+static UInt32 regfixRsnAkmMask(const u_int8_t *ie, size_t cap)
+{
+    if (ie == NULL || cap < 2 || ie[0] != 0x30)
+        return 0;
+    size_t len = (size_t)ie[1] + 2;
+    if (len > cap)
+        len = cap;
+    size_t off = 2 + 2 + 4;                 /* id,len  version  group cipher */
+    if (off + 2 > len)
+        return 0;
+    size_t pc = (size_t)ie[off] | ((size_t)ie[off + 1] << 8);
+    off += 2 + 4 * pc;
+    if (off + 2 > len)
+        return 0;
+    size_t ac = (size_t)ie[off] | ((size_t)ie[off + 1] << 8);
+    off += 2;
+    UInt32 mask = 0;
+    for (size_t i = 0; i < ac && off + 4 <= len; i++, off += 4) {
+        if (ie[off] == 0x00 && ie[off + 1] == 0x0F && ie[off + 2] == 0xAC &&
+            ie[off + 3] < 32)
+            mask |= (UInt32)1 << ie[off + 3];
+    }
+    return mask;
+}
+
+
 #define super IO80211InfraProtocol
 OSDefineMetaClassAndStructors(AirportItlwmSkywalkInterface, IO80211InfraProtocol);
 
@@ -92,9 +155,64 @@ static int ieeeChanFlag2apple(int flags, int bw)
     return ret;
 }
 
+const char *
+AirportItlwmSkywalkInterface::getBSDNamePrefix(void)
+{
+    /*
+     * Native Sonoma/Broadcom publishes the role-2 companion
+     * as the LowLatency interface "llw0".
+     *
+     * Preserve normal behavior for Infrastructure role 1.
+     */
+    if (getInterfaceRole() == 2)
+        return "llw";
+
+    return super::getBSDNamePrefix();
+}
+
+
+void *AirportItlwmSkywalkInterface::createPeerManager(void)
+{
+    XYLog("AIRPLAY SKY: createPeerManager ENTER\n");
+
+    void *result = super::createPeerManager();
+
+    XYLog("AIRPLAY SKY: createPeerManager EXIT result=%p\n", result);
+
+    return result;
+}
+
+IOReturn AirportItlwmSkywalkInterface::reportDataPathEvents(UInt a, void *b, unsigned long c, bool d)
+{
+    IOLog("AIRPLAY SKY TRACE: reportDataPathEvents a=%u b=%p c=%lu d=%d\n",
+          a, b, c, d);
+
+    IOReturn result = super::reportDataPathEvents(a, b, c, d);
+
+    IOLog("AIRPLAY SKY TRACE: reportDataPathEvents RETURN=%d\n", result);
+    return result;
+}
+
+void AirportItlwmSkywalkInterface::setDataPathState(bool state)
+{
+    IOLog("AIRPLAY SKY TRACE: setDataPathState state=%d\n", state);
+    super::setDataPathState(state);
+}
+
+void *AirportItlwmSkywalkInterface::getP2PSkywalkPeerMgr(void)
+{
+    IOLog("AIRPLAY SKY TRACE: getP2PSkywalkPeerMgr ENTER\n");
+
+    void *result = super::getP2PSkywalkPeerMgr();
+
+    IOLog("AIRPLAY SKY TRACE: getP2PSkywalkPeerMgr RETURN=%p\n", result);
+    return result;
+}
+
 void AirportItlwmSkywalkInterface::associateSSID(uint8_t *ssid, uint32_t ssid_len, const struct ether_addr &bssid, uint32_t authtype_lower, uint32_t authtype_upper, uint8_t *key, uint32_t key_len, int key_index)
 {
     struct ieee80211com *ic = fHalService->get80211Controller();
+    ic->ic_flags &= ~IEEE80211_F_AUTO_JOIN;
     
     ieee80211_disable_rsn(ic);
     ieee80211_disable_wep(ic);
@@ -185,6 +303,8 @@ void AirportItlwmSkywalkInterface::setPTK(const u_int8_t *key, size_t key_len) {
         keylen = ieee80211_cipher_keylen(ni->ni_rsncipher);
         if (key_len != keylen) {
             XYLog("PTK length mismatch. expected %d, got %zu\n", keylen, key_len);
+            instance->setProperty("AIRPLAYJOINPtkLenMismatch",
+                (unsigned long long)__sync_add_and_fetch(&gJoinPtkLenMismatch, (UInt32)1), 32);
             return;
         }
         prsc = /*(gtk == NULL) ? LE_READ_6(key->rsc) :*/ 0;
@@ -199,10 +319,15 @@ void AirportItlwmSkywalkInterface::setPTK(const u_int8_t *key, size_t key_len) {
         /* install the PTK */
         if ((*ic->ic_set_key)(ic, ni, k) != 0) {
             XYLog("setting PTK failed\n");
+            instance->setProperty("AIRPLAYJOINPtkSetFail",
+                (unsigned long long)__sync_add_and_fetch(&gJoinPtkSetFail, (UInt32)1), 32);
             return;
         }
-        else
+        else {
             XYLog("setting PTK successfully\n");
+            instance->setProperty("AIRPLAYJOINPtkOK",
+                (unsigned long long)__sync_add_and_fetch(&gJoinPtkOK, (UInt32)1), 32);
+        }
         ni->ni_flags &= ~IEEE80211_NODE_RSN_NEW_PTK;
         ni->ni_flags &= ~IEEE80211_NODE_TXRXPROT;
         ni->ni_flags |= IEEE80211_NODE_RXPROT;
@@ -222,6 +347,8 @@ void AirportItlwmSkywalkInterface::setGTK(const u_int8_t *gtk, size_t key_len, u
         keylen = ieee80211_cipher_keylen(ni->ni_rsngroupcipher);
         if (key_len != keylen) {
             XYLog("GTK length mismatch. expected %d, got %zu\n", keylen, key_len);
+            instance->setProperty("AIRPLAYJOINGtkLenMismatch",
+                (unsigned long long)__sync_add_and_fetch(&gJoinGtkLenMismatch, (UInt32)1), 32);
             return;
         }
         /* map GTK to 802.11 key */
@@ -239,10 +366,15 @@ void AirportItlwmSkywalkInterface::setGTK(const u_int8_t *gtk, size_t key_len, u
             /* install the GTK */
             if ((*ic->ic_set_key)(ic, ni, k) != 0) {
                 XYLog("setting GTK failed\n");
+                instance->setProperty("AIRPLAYJOINGtkSetFail",
+                    (unsigned long long)__sync_add_and_fetch(&gJoinGtkSetFail, (UInt32)1), 32);
                 return;
             }
-            else
+            else {
                 XYLog("setting GTK successfully\n");
+                instance->setProperty("AIRPLAYJOINGtkOK",
+                    (unsigned long long)__sync_add_and_fetch(&gJoinGtkOK, (UInt32)1), 32);
+            }
         }
     }
     
@@ -264,6 +396,18 @@ void AirportItlwmSkywalkInterface::setGTK(const u_int8_t *gtk, size_t key_len, u
     }
 }
 
+
+IOReturn AirportItlwmSkywalkInterface::
+setVIRTUAL_IF_CREATE(apple80211_virt_if_create_data *)
+{
+    /*
+     * Match the KGP reference behavior.
+     * The Skywalk interface does not consume VIRTUAL_IF_CREATE.
+     */
+    return kIOReturnUnsupported;
+}
+
+
 bool AirportItlwmSkywalkInterface::
 init(IOService *provider)
 {
@@ -277,6 +421,15 @@ init(IOService *provider)
         return false;
     this->fHalService = instance->fHalService;
     this->scanSource = instance->scanSource;
+
+    instance->setProperty(
+        "AJB26ProbeVersion",
+        (unsigned long long)2602, 32);
+
+    instance->setProperty(
+        "AJB26SkyInit",
+        (unsigned long long)1, 8);
+
     return ret;
 }
 
@@ -493,7 +646,10 @@ getMCS_VHT(struct apple80211_mcs_vht_data *data)
     memset(data, 0, sizeof(struct apple80211_mcs_vht_data));
     data->version = APPLE80211_VERSION;
     data->guard_interval = (ieee80211_node_supports_vht_sgi80(ic->ic_bss) || ieee80211_node_supports_vht_sgi160(ic->ic_bss)) ? APPLE80211_GI_SHORT : APPLE80211_GI_LONG;
-    data->index = ic->ic_bss->ni_txmcs;
+    uint32_t heMcs = 0;
+    data->index = (ic->ic_curmode == IEEE80211_MODE_11AX &&
+                   fHalService->getDriverInfo()->getFirmwareTxMcs(&heMcs)) ?
+                  heMcs : ic->ic_bss->ni_txmcs;
     data->nss = fHalService->getDriverInfo()->getTxNSS();
     switch (ic->ic_bss->ni_chw) {
         case IEEE80211_CHAN_WIDTH_40:
@@ -570,7 +726,12 @@ getRATE(struct apple80211_rate_data *rd)
         rd->version = APPLE80211_VERSION;
         rd->num_radios = 1;
         sgi = ieee80211_node_supports_sgi(ic->ic_bss);
-        if (ic->ic_curmode == IEEE80211_MODE_11AC) {
+        /* Use firmware-selected HE initial rate only when valid. */
+        uint32_t fwHeMbps = 0;
+        if (ic->ic_curmode == IEEE80211_MODE_11AX &&
+            fHalService->getDriverInfo()->getFirmwareTxRateMbps(&fwHeMbps)) {
+            rd->rate[0] = fwHeMbps;
+        } else if (ic->ic_curmode == IEEE80211_MODE_11AC) {
             if (sgi)
                 index += 1;
             nss = fHalService->getDriverInfo()->getTxNSS();
@@ -702,7 +863,7 @@ getNOISE(struct apple80211_noise_data *nd)
         nd->version = APPLE80211_VERSION;
         nd->num_radios = 1;
         nd->noise[0]
-        = nd->aggregate_noise = -fHalService->getDriverInfo()->getBSSNoise();
+        = nd->aggregate_noise = fHalService->getDriverInfo()->getBSSNoise(); /* NOISEFIX: already dBm (negative), no sign flip */
         nd->noise_unit = APPLE80211_UNIT_DBM;
         return kIOReturnSuccess;
     }
@@ -726,44 +887,268 @@ getNSS(struct apple80211_nss_data *data)
     return kIOReturnSuccess;
 }
 
+static volatile UInt32 gAJB26SkyAssocEnter = 0;
+static volatile UInt32 gAJB26SkyAssocSkipPreScan = 0;
+static volatile UInt32 gAJB26SkyAssocSkipAuthAssoc = 0;
+static volatile UInt32 gAJB26SkyDisassocEnter = 0;
+static volatile UInt32 gAJB26SkyDisassocSkipPreScan = 0;
+static volatile UInt32 gAJB26SkyDisassocSkipAuthAssoc = 0;
+
+/* JOINFAST-20261010: shared with ItlIwx.cpp (see setASSOCIATE) */
+extern volatile UInt32 gJoinFastAbortReq;
+static volatile UInt32 gJoinFastReq = 0;
+static volatile UInt32 gJoinFastNodeFound = 0;
+static volatile UInt32 gJoinFastNoNode = 0;
+static volatile UInt32 gJoinFastAbortQueued = 0;
+static volatile UInt32 gJoinFastNotScanState = 0;
+
 IOReturn AirportItlwmSkywalkInterface::
 setASSOCIATE(struct apple80211_assoc_data *ad)
 {
-    XYLog("%s [%s] mode=%d ad_auth_lower=%d ad_auth_upper=%d rsn_ie_len=%d%s%s%s%s%s%s%s\n", __FUNCTION__, ad->ad_ssid, ad->ad_mode, ad->ad_auth_lower, ad->ad_auth_upper, ad->ad_rsn_ie_len,
-          (ad->ad_flags & 2) ? ", Instant Hotspot" : "",
-          (ad->ad_flags & 4) ? ", Auto Instant Hotspot" : "",
-          (ad->ad_rsn_ie[APPLE80211_MAX_RSN_IE_LEN] & 1) ? ", don't disassociate" : "",
-          (ad->ad_rsn_ie[APPLE80211_MAX_RSN_IE_LEN] & 2) ? ", don't blacklist" : "",
-          (ad->ad_rsn_ie[APPLE80211_MAX_RSN_IE_LEN] & 4) ? ", closed Network" : "",
-          (ad->ad_rsn_ie[APPLE80211_MAX_RSN_IE_LEN] & 8) ? ", 802.1X" : "",
-          (ad->ad_rsn_ie[APPLE80211_MAX_RSN_IE_LEN] & 0x20) ? ", force BSSID" : "");
+    if (!ad)
+        return kIOReturnError;
+    
+    XYLog("%s mode=%d ad_ssid_len=%u ad_auth_lower=%d ad_auth_upper=%d rsn_ie_len=%u\n",
+          __FUNCTION__, ad->ad_mode, (unsigned int)ad->ad_ssid_len,
+          ad->ad_auth_lower, ad->ad_auth_upper, (unsigned int)ad->ad_rsn_ie_len);
     
     struct apple80211_rsn_ie_data rsn_ie_data;
     struct apple80211_authtype_data auth_type_data;
     struct ieee80211com *ic = fHalService->get80211Controller();
+    enum ieee80211_state state = ic->ic_state;
 
-    if (!ad)
-        return kIOReturnError;
-    
-    if (ic->ic_state < IEEE80211_S_SCAN)
-        return kIOReturnSuccess;
-    
-    if (ic->ic_state == IEEE80211_S_ASSOC || ic->ic_state == IEEE80211_S_AUTH)
-        return kIOReturnSuccess;
+    UInt32 ajb26Enter = __sync_add_and_fetch(
+        &gAJB26SkyAssocEnter, (UInt32)1);
+    instance->setProperty(
+        "AJB26SkyAssocEnter",
+        (unsigned long long)ajb26Enter, 32);
+    instance->setProperty(
+        "AJB26SkyAssocLastState",
+        (unsigned long long)(UInt32)state, 32);
 
-    if (ad->ad_mode != APPLE80211_AP_MODE_IBSS) {
-        disassocIsVoluntary = false;
-        auth_type_data.version = APPLE80211_VERSION;
-        auth_type_data.authtype_upper = ad->ad_auth_upper;
-        auth_type_data.authtype_lower = ad->ad_auth_lower;
-        setAUTH_TYPE(&auth_type_data);
-        rsn_ie_data.version = APPLE80211_VERSION;
-        rsn_ie_data.len = ad->ad_rsn_ie[1] + 2;
-        memcpy(rsn_ie_data.ie, ad->ad_rsn_ie, rsn_ie_data.len);
-        setRSN_IE(&rsn_ie_data);
-
-        associateSSID(ad->ad_ssid, ad->ad_ssid_len, ad->ad_bssid, ad->ad_auth_lower, ad->ad_auth_upper, ad->ad_key.key, ad->ad_key.key_len, ad->ad_key.key_index);
+    {
+        UInt32 n = __sync_add_and_fetch(&gJoinReq, (UInt32)1);
+        instance->setProperty("AIRPLAYJOINReqCount", (unsigned long long)n, 32);
+        instance->setProperty("AIRPLAYJOINReqLastState",
+                              (unsigned long long)(UInt32)state, 32);
+        instance->setProperty("AIRPLAYJOINReqLastAuthUpper",
+                              (unsigned long long)(UInt32)ad->ad_auth_upper, 32);
+        instance->setProperty("AIRPLAYJOINReqLastAuthLower",
+                              (unsigned long long)(UInt32)ad->ad_auth_lower, 32);
+        instance->setProperty("AIRPLAYJOINReqLastKeyLen",
+                              (unsigned long long)(UInt32)ad->ad_key.key_len, 32);
+        instance->setProperty("AIRPLAYJOINReqLastAkmMask",
+                              (unsigned long long)regfixRsnAkmMask(ad->ad_rsn_ie, sizeof(ad->ad_rsn_ie)), 32);
+        if (ad->ad_auth_upper & (APPLE80211_AUTHTYPE_WPA3_SAE | APPLE80211_AUTHTYPE_WPA3_FT_SAE)) {
+            UInt32 s = __sync_add_and_fetch(&gJoinReqSAE, (UInt32)1);
+            instance->setProperty("AIRPLAYJOINReqSAE", (unsigned long long)s, 32);
+        }
+        if (ad->ad_auth_upper & (APPLE80211_AUTHTYPE_WPA_PSK | APPLE80211_AUTHTYPE_WPA2_PSK | APPLE80211_AUTHTYPE_SHA256_PSK)) {
+            UInt32 p = __sync_add_and_fetch(&gJoinReqPSK, (UInt32)1);
+            instance->setProperty("AIRPLAYJOINReqPSK", (unsigned long long)p, 32);
+        }
     }
+
+    if (ad->ad_ssid_len > APPLE80211_MAX_SSID_LEN)
+        return kIOReturnError;
+
+    if (ad->ad_mode == APPLE80211_AP_MODE_IBSS)
+        return kIOReturnSuccess;
+
+    /*
+     * SWITCHFIX: upstream silently returned success (and did NOTHING) when
+     * ic_state was INIT, AUTH or ASSOC. airportd then waited out its 10s
+     * assoc timeout before re-sending -- the "click it again" symptom.
+     * Now: only skip when we are already mid-join to the SAME network.
+     */
+    bool sameDesired =
+        (UInt32)ic->ic_des_esslen == ad->ad_ssid_len &&
+        memcmp(ic->ic_des_essid, ad->ad_ssid, ad->ad_ssid_len) == 0;
+
+    if ((state == IEEE80211_S_AUTH || state == IEEE80211_S_ASSOC) && sameDesired) {
+        UInt32 ajb26Skip = __sync_add_and_fetch(
+            &gAJB26SkyAssocSkipAuthAssoc, (UInt32)1);
+        instance->setProperty(
+            "AJB26SkyAssocSkipAuthAssoc",
+            (unsigned long long)ajb26Skip, 32);
+        return kIOReturnSuccess;
+    }
+
+    /*
+     * REGFIX: a repeat ASSOCIATE for the network we are already on while the
+     * 4-way handshake is still running. associateSSID() would disable RSN and
+     * reload the PSK mid-handshake, breaking it (airportd then thinks the
+     * password is wrong and prompts for it). Let the handshake finish.
+     */
+    if (state == IEEE80211_S_RUN && ic->ic_bss != NULL &&
+        (ic->ic_flags & IEEE80211_F_RSNON) && !ic->ic_bss->ni_port_valid &&
+        (UInt32)ic->ic_bss->ni_esslen == ad->ad_ssid_len &&
+        memcmp(ic->ic_bss->ni_essid, ad->ad_ssid, ad->ad_ssid_len) == 0) {
+        UInt32 h = __sync_add_and_fetch(&gJoinHandshakeReassocSkipped, (UInt32)1);
+        instance->setProperty("AIRPLAYJOINHandshakeReassocSkipped",
+                              (unsigned long long)h, 32);
+        return kIOReturnSuccess;
+    }
+
+    /* Are we currently up on exactly the network being requested? */
+    bool onRequested = false;
+    if (state == IEEE80211_S_RUN && ic->ic_bss != NULL) {
+        onRequested =
+            (UInt32)ic->ic_bss->ni_esslen == ad->ad_ssid_len &&
+            memcmp(ic->ic_bss->ni_essid, ad->ad_ssid, ad->ad_ssid_len) == 0;
+    }
+
+    /* Leaving the current/in-progress network: tell the AP before rekeying. */
+    bool mustRescan = !onRequested &&
+        (state == IEEE80211_S_RUN || state == IEEE80211_S_AUTH ||
+         state == IEEE80211_S_ASSOC);
+    if (mustRescan && state > IEEE80211_S_AUTH && ic->ic_bss != NULL)
+        IEEE80211_SEND_MGMT(ic, ic->ic_bss, IEEE80211_FC0_SUBTYPE_DEAUTH,
+                            IEEE80211_REASON_AUTH_LEAVE);
+
+    /*
+     * SEQFIX: race detector. macOS already asked to disconnect, but the old
+     * link is still reported up when the new join arrives. Before SEQFIX this
+     * was the normal case; with the fix it should stay 0.
+     */
+    if (gSeqVoluntaryDown && (instance->currentStatus & kIONetworkLinkActive)) {
+        UInt32 r = __sync_add_and_fetch(&gSeqAssocDuringTeardown, (UInt32)1);
+        instance->setProperty("AIRPLAYSEQAssocDuringTeardown", (unsigned long long)r, 32);
+    }
+
+    /*
+     * SEQFIX: leaving a live link for another network without a DISASSOCIATE
+     * first. Report the old link down NOW (voluntary), before the new join
+     * starts, so airportd never sees it arrive mid-join.
+     */
+    if (mustRescan && (instance->currentStatus & kIONetworkLinkActive)) {
+        __sync_lock_test_and_set(&gSeqVoluntaryDown, (UInt32)1);
+        disassocIsVoluntary = true;
+        ic->ic_deauth_reason = APPLE80211_REASON_ASSOC_LEAVING;
+        ieee80211_set_link_state(ic, LINK_STATE_DOWN);
+        UInt32 a = __sync_add_and_fetch(&gSeqAssocSyncDown, (UInt32)1);
+        instance->setProperty("AIRPLAYSEQAssocSyncLinkDown", (unsigned long long)a, 32);
+        XYLog("SEQFIX: switch from live link - link down reported before join\n");
+    }
+    __sync_lock_test_and_set(&gSeqJoinInFlight, (UInt32)1);
+    instance->setProperty("AIRPLAYSEQJoinInFlight", (unsigned long long)1, 32);
+    {
+        uint64_t now = airport_up_time();
+        if (gSeqDisassocStampMs != 0 && now >= gSeqDisassocStampMs &&
+            now - gSeqDisassocStampMs < 60000) {
+            instance->setProperty("AIRPLAYSEQDisassocToAssocMs",
+                                  (unsigned long long)(now - gSeqDisassocStampMs), 32);
+        }
+        gSeqDisassocStampMs = 0;
+        gSeqAssocStampMs = now;
+    }
+
+    /* Always record the requested target (ic_des_essid, RSN, keys). */
+    disassocIsVoluntary = false;
+    auth_type_data.version = APPLE80211_VERSION;
+    auth_type_data.authtype_upper = ad->ad_auth_upper;
+    auth_type_data.authtype_lower = ad->ad_auth_lower;
+    setAUTH_TYPE(&auth_type_data);
+    rsn_ie_data.version = APPLE80211_VERSION;
+    rsn_ie_data.len = ad->ad_rsn_ie[1] + 2;
+    memcpy(rsn_ie_data.ie, ad->ad_rsn_ie, rsn_ie_data.len);
+    setRSN_IE(&rsn_ie_data);
+
+    associateSSID(ad->ad_ssid, ad->ad_ssid_len, ad->ad_bssid, ad->ad_auth_lower, ad->ad_auth_upper, ad->ad_key.key, ad->ad_key.key_len, ad->ad_key.key_index);
+
+    /*
+     * JOINFAST-20261010: the BCM reference is connected ~0.2 s after macOS
+     * hands it the join. We waited for the full all-channel firmware scan that
+     * the preceding DISASSOCIATE started, and only end_scan picked the target:
+     * SEQAssocToLinkUpMs 4.3-4.7 s on every switch. If the BSSID macOS asked
+     * for is already in the scan table, end that scan now. The firmware's
+     * scan-complete then runs the normal end_scan -> choose_bss -> join path.
+     */
+    {
+        UInt32 jr = __sync_add_and_fetch(&gJoinFastReq, (UInt32)1);
+        instance->setProperty("AIRPLAYJOINFASTReq", (unsigned long long)jr, 32);
+        static const uint8_t jfZero[IEEE80211_ADDR_LEN] = { 0 };
+        struct ieee80211_node *jfNode = NULL;
+        /* JOINFAST2: JOINFAST never found the BSSID (NoNode 11/11). Record
+         * why, and fall back to any scan-table entry with the requested SSID;
+         * end_scan -> choose_bss then picks the best one, as it does today. */
+        if (memcmp(ad->ad_bssid.octet, jfZero, IEEE80211_ADDR_LEN) == 0) {
+            static volatile UInt32 jfBz = 0;
+            UInt32 bz = __sync_add_and_fetch(&jfBz, (UInt32)1);
+            instance->setProperty("AIRPLAYJOINFASTBssidZero", (unsigned long long)bz, 32);
+        } else {
+            jfNode = ieee80211_find_node(ic, ad->ad_bssid.octet);
+            if (jfNode == NULL) {
+                static volatile UInt32 jfBm = 0;
+                UInt32 bm = __sync_add_and_fetch(&jfBm, (UInt32)1);
+                instance->setProperty("AIRPLAYJOINFASTBssidNotInTable", (unsigned long long)bm, 32);
+            }
+        }
+        if (jfNode != NULL && !(jfNode->ni_chan != NULL &&
+            jfNode->ni_chan != IEEE80211_CHAN_ANYC &&
+            (UInt32)jfNode->ni_esslen == ad->ad_ssid_len &&
+            memcmp(jfNode->ni_essid, ad->ad_ssid, ad->ad_ssid_len) == 0))
+            jfNode = NULL;
+        if (jfNode == NULL) {
+            struct ieee80211_node *jfn;
+            UInt32 jfTable = 0;
+            RB_FOREACH(jfn, ieee80211_tree, &ic->ic_tree) {
+                jfTable++;
+                if (jfNode == NULL && jfn->ni_chan != NULL &&
+                    jfn->ni_chan != IEEE80211_CHAN_ANYC &&
+                    (UInt32)jfn->ni_esslen == ad->ad_ssid_len &&
+                    memcmp(jfn->ni_essid, ad->ad_ssid, ad->ad_ssid_len) == 0)
+                    jfNode = jfn;
+            }
+            instance->setProperty("AIRPLAYJOINFASTTableSize", (unsigned long long)jfTable, 32);
+            if (jfNode != NULL) {
+                static volatile UInt32 jfSs = 0;
+                UInt32 ss = __sync_add_and_fetch(&jfSs, (UInt32)1);
+                instance->setProperty("AIRPLAYJOINFASTSsidFound", (unsigned long long)ss, 32);
+            }
+        }
+        if (jfNode != NULL) {
+            UInt32 nf = __sync_add_and_fetch(&gJoinFastNodeFound, (UInt32)1);
+            instance->setProperty("AIRPLAYJOINFASTNodeFound", (unsigned long long)nf, 32);
+            instance->setProperty("AIRPLAYJOINFASTLastChan",
+                (unsigned long long)ieee80211_chan2ieee(ic, jfNode->ni_chan), 32);
+            if (state == IEEE80211_S_SCAN) {
+                __sync_lock_test_and_set(&gJoinFastAbortReq, (UInt32)1);
+                UInt32 aq = __sync_add_and_fetch(&gJoinFastAbortQueued, (UInt32)1);
+                instance->setProperty("AIRPLAYJOINFASTAbortQueued", (unsigned long long)aq, 32);
+                ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
+            } else {
+                UInt32 ns = __sync_add_and_fetch(&gJoinFastNotScanState, (UInt32)1);
+                instance->setProperty("AIRPLAYJOINFASTNotScanState", (unsigned long long)ns, 32);
+            }
+        } else {
+            UInt32 nn = __sync_add_and_fetch(&gJoinFastNoNode, (UInt32)1);
+            instance->setProperty("AIRPLAYJOINFASTNoNode", (unsigned long long)nn, 32);
+        }
+    }
+
+    if (state < IEEE80211_S_SCAN) {
+        /*
+         * Card is in INIT (e.g. init_task reset after a failed scan abort).
+         * Target is stored; the scan iwm_init()/iwx_init() starts will match
+         * ic_des_essid in ieee80211_end_scan(). Count it so we can see it.
+         */
+        UInt32 ajb26Skip = __sync_add_and_fetch(
+            &gAJB26SkyAssocSkipPreScan, (UInt32)1);
+        instance->setProperty(
+            "AJB26SkyAssocDeferredInit",
+            (unsigned long long)ajb26Skip, 32);
+        XYLog("SWITCHFIX: assoc stored while state=%d, will join after init scan\n", state);
+        return kIOReturnSuccess;
+    }
+
+    if (mustRescan) {
+        XYLog("SWITCHFIX: leaving state=%d for new SSID, forcing rescan\n", state);
+        instance->setProperty("AJB26SkyAssocForcedRescan",
+                              (unsigned long long)1, 32);
+        ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
+    }
+    /* state == SCAN: nothing more; end_scan picks the new ic_des_essid. */
     return kIOReturnSuccess;
 }
 
@@ -773,16 +1158,108 @@ setDISASSOCIATE(struct apple80211_disassoc_data *ad)
     XYLog("%s\n", __FUNCTION__);
     struct ieee80211com *ic = fHalService->get80211Controller();
 
-    if (ic->ic_state < IEEE80211_S_SCAN)
+    UInt32 ajb26Enter = __sync_add_and_fetch(
+        &gAJB26SkyDisassocEnter, (UInt32)1);
+    instance->setProperty(
+        "AJB26SkyDisassocEnter",
+        (unsigned long long)ajb26Enter, 32);
+    instance->setProperty(
+        "AJB26SkyDisassocLastState",
+        (unsigned long long)(UInt32)ic->ic_state, 32);
+
+    if (ic->ic_state < IEEE80211_S_SCAN) {
+        UInt32 ajb26Skip = __sync_add_and_fetch(
+            &gAJB26SkyDisassocSkipPreScan, (UInt32)1);
+        instance->setProperty(
+            "AJB26SkyDisassocSkipPreScan",
+            (unsigned long long)ajb26Skip, 32);
         return kIOReturnSuccess;
-    
+    }
+
+    /*
+     * REGFIX: restore the mid-join guard (removed again in the AJBFINAL tree;
+     * ASSOC-BUSY-FIX had already put it back once). A DISASSOCIATE that lands
+     * during AUTH/ASSOC used to wipe the target SSID and keys
+     * (deselect_ess) and abort the join, costing an airportd 10s retry.
+     * Switching to a different network mid-join is handled in setASSOCIATE.
+     */
+    if (ic->ic_state == IEEE80211_S_ASSOC ||
+        ic->ic_state == IEEE80211_S_AUTH) {
+        UInt32 ajb26Skip = __sync_add_and_fetch(
+            &gAJB26SkyDisassocSkipAuthAssoc, (UInt32)1);
+        instance->setProperty(
+            "AJB26SkyDisassocSkipAuthAssoc",
+            (unsigned long long)ajb26Skip, 32);
+        UInt32 d = __sync_add_and_fetch(&gJoinDisassocMidJoinIgnored, (UInt32)1);
+        instance->setProperty("AIRPLAYJOINDisassocMidJoinIgnored",
+                              (unsigned long long)d, 32);
+        return kIOReturnSuccess;
+    }
+
+    /*
+     * DISASSOCFIX: macOS sends DISASSOCIATE 2-3 times for one click on another
+     * network (AJB26SkyDisassocEnter +2/+3 per switch). The first one already
+     * sent the deauth, reported link down and cleared the target. ic_state only
+     * leaves RUN later on the newstate task, so the repeats still saw RUN and
+     * did the whole teardown again: second deauth to the old AP while its
+     * station was being removed, another SCAN request, RUN-exit cleanup again
+     * (AIRPLAYNSRunExitCleanup +2/+3). A repeat is now a no-op.
+     * Repeat = voluntary down already latched, link already reported down,
+     * no target set, no new join requested since.
+     */
+    if (gSeqVoluntaryDown &&
+        !(instance->currentStatus & kIONetworkLinkActive) &&
+        ic->ic_des_esslen == 0 &&
+        !gSeqJoinInFlight) {
+        UInt32 dup = __sync_add_and_fetch(&gJoinDisassocDuplicateIgnored, (UInt32)1);
+        instance->setProperty("AIRPLAYJOINDisassocDuplicateIgnored",
+                              (unsigned long long)dup, 32);
+        XYLog("DISASSOCFIX: repeat DISASSOCIATE ignored (state=%d)\n", ic->ic_state);
+        return kIOReturnSuccess;
+    }
+
+    /*
+     * JOINGUARD-20261010: a DISASSOCIATE that lands after macOS already asked
+     * for the new network (join in flight, new target set) is a stale repeat
+     * of the switch's first DISASSOCIATE. The first one already deauthed the
+     * old AP and reported link down. Running the teardown again wiped the new
+     * target (deselect_ess, +~2 s join restart) and queued new_state(SCAN),
+     * which ran after the new link reached RUN and took it down ~50 ms later
+     * (SEQShortLivedLinks / involuntary link-down, airportd re-join ~10 s).
+     * Counted 1 per switch (JOINDisassocDuringJoin). Now a no-op.
+     */
+    if (gSeqJoinInFlight && ic->ic_des_esslen != 0) {
+        UInt32 dj = __sync_add_and_fetch(&gJoinDisassocDuringJoin, (UInt32)1);
+        instance->setProperty("AIRPLAYJOINDisassocDuringJoin",
+                              (unsigned long long)dj, 32);
+        instance->setProperty("AIRPLAYJOINDisassocDuringJoinIgnored",
+                              (unsigned long long)dj, 32);
+        XYLog("JOINGUARD: stale DISASSOCIATE during join ignored (state=%d)\n", ic->ic_state);
+        return kIOReturnSuccess;
+    }
+
     if (ic->ic_state > IEEE80211_S_AUTH && ic->ic_bss != NULL)
         IEEE80211_SEND_MGMT(ic, ic->ic_bss, IEEE80211_FC0_SUBTYPE_DEAUTH, IEEE80211_REASON_AUTH_LEAVE);
     
-    if (ic->ic_state == IEEE80211_S_ASSOC || ic->ic_state == IEEE80211_S_AUTH)
-        return kIOReturnSuccess;
     
     disassocIsVoluntary = true;
+
+    /*
+     * SEQFIX: report the link down here, synchronously, before returning to
+     * airportd (it sends ASSOCIATE ~1 ms later). Previously the link-down came
+     * later from the net80211 task, landed mid-join, was treated as
+     * "Unexpected link down" and triggered a competing auto-join. The deauth
+     * above is already handed to the hardware (send_mgmt calls if_start).
+     */
+    __sync_lock_test_and_set(&gSeqVoluntaryDown, (UInt32)1);
+    gSeqDisassocStampMs = airport_up_time();
+    ic->ic_deauth_reason = APPLE80211_REASON_ASSOC_LEAVING;
+    if (instance->currentStatus & kIONetworkLinkActive) {
+        ieee80211_set_link_state(ic, LINK_STATE_DOWN);
+        UInt32 d = __sync_add_and_fetch(&gSeqDisassocSyncDown, (UInt32)1);
+        instance->setProperty("AIRPLAYSEQDisassocSyncLinkDown", (unsigned long long)d, 32);
+        XYLog("SEQFIX: disassociate - link down reported synchronously\n");
+    }
 
     ieee80211_del_ess(ic, nullptr, 0, 1);
     ieee80211_deselect_ess(ic);
@@ -792,6 +1269,103 @@ setDISASSOCIATE(struct apple80211_disassoc_data *ad)
     ic->ic_assoc_status = APPLE80211_STATUS_UNAVAILABLE;
     ic->ic_deauth_reason = APPLE80211_REASON_ASSOC_LEAVING;
     ieee80211_new_state(ic, IEEE80211_S_SCAN, -1);
+    return kIOReturnSuccess;
+}
+
+/* SONOMA14-CHAN207-V1: experimental native channel table for Sonoma 14.4.
+ * Observed IO80211AWDLPeerManager caller clears exactly 10016 bytes and
+ * initializes first two u32 fields to 1 before invoking selector 207.
+ * This is for that Skywalk ABI; NOT the older 128-entry legacy ioctl ABI.
+ * Unidentified native fields are left zero. Do NOT use for other macOS ABIs.
+ */
+namespace {
+struct Sonoma14ChannelsInfo {
+    uint32_t version;                 // 0x0000
+    uint32_t reserved04;              // 0x0004 (Apple seeds to 1)
+    uint32_t reserved08;              // 0x0008
+    uint16_t num_chan_specs;          // 0x000c
+    uint16_t chan_spec[400];          // 0x000e (unknown native encoding; zeroed)
+    uint8_t chan_num[400];            // 0x032e
+    uint8_t indoor_restric[400];      // 0x04be (unknown mapping; zeroed)
+    uint8_t radar_dfs[400];           // 0x064e
+    uint8_t passive[400];             // 0x07de
+    uint8_t support_40Mhz[400];       // 0x096e
+    uint8_t support_80Mhz[400];       // 0x0afe
+    uint8_t alignment[2];            // 0x0c8e
+    uint32_t per_chan[400];          // 0x0c90 (unknown semantics; zeroed)
+    uint32_t chan_bitmap[400];       // 0x12d0 (unknown semantics; zeroed)
+    uint8_t native_tail[3600];       // 0x1910..0x271f (unidentified; zeroed)
+} __attribute__((packed));
+
+static_assert(sizeof(Sonoma14ChannelsInfo) == 10016, "Sonoma native channel size");
+static_assert(__offsetof(Sonoma14ChannelsInfo, num_chan_specs) == 0x0c, "Sonoma count offset");
+static_assert(__offsetof(Sonoma14ChannelsInfo, chan_spec) == 0x0e, "Sonoma spec offset");
+static_assert(__offsetof(Sonoma14ChannelsInfo, chan_num) == 0x32e, "Sonoma channel offset");
+static_assert(__offsetof(Sonoma14ChannelsInfo, indoor_restric) == 0x4be, "Sonoma indoor offset");
+static_assert(__offsetof(Sonoma14ChannelsInfo, radar_dfs) == 0x64e, "Sonoma DFS offset");
+static_assert(__offsetof(Sonoma14ChannelsInfo, passive) == 0x7de, "Sonoma passive offset");
+static_assert(__offsetof(Sonoma14ChannelsInfo, support_40Mhz) == 0x96e, "Sonoma HT40 offset");
+static_assert(__offsetof(Sonoma14ChannelsInfo, support_80Mhz) == 0xafe, "Sonoma VHT80 offset");
+static_assert(__offsetof(Sonoma14ChannelsInfo, per_chan) == 0xc90, "Sonoma per-channel offset");
+static_assert(__offsetof(Sonoma14ChannelsInfo, chan_bitmap) == 0x12d0, "Sonoma bitmap offset");
+static_assert(__offsetof(Sonoma14ChannelsInfo, native_tail) == 0x1910, "Sonoma native tail offset");
+} // anonymous namespace
+
+IOReturn AirportItlwmSkywalkInterface::
+getCHANNELS_INFO(struct apple80211_channels_info *legacyTypedPointer)
+{
+    static volatile UInt32 calls = 0;
+    UInt32 hits = __sync_add_and_fetch(&calls, 1);
+    setProperty("AIRPLAYChanIoctlGet207Calls", (unsigned long long)hits, 32);
+
+    if (!legacyTypedPointer)
+        return kIOReturnBadArgument;
+    if (!fHalService)
+        return kIOReturnNotReady;
+    struct ieee80211com *ic = fHalService->get80211Controller();
+    if (!ic)
+        return kIOReturnNotReady;
+
+    // Apple seeds these two fields to 1 before selector 207. Fail closed
+    // for callers with a different header; there is no buffer length here.
+    // A matching seed does NOT prove every possible caller has 10016 bytes.
+    if (legacyTypedPointer->version != 1 || legacyTypedPointer->unk1 != 1) {
+        setProperty("AIRPLAYChanIoctlNative207SeedMismatch", (unsigned long long)1, 8);
+        return kIOReturnUnsupported;
+    }
+
+    // The native Apple caller is confirmed to allocate 10016 bytes.
+    // This method is NOT safe for callers using the old legacy-sized buffer.
+    auto *table = reinterpret_cast<Sonoma14ChannelsInfo *>(legacyTypedPointer);
+    memset(table, 0, sizeof(*table));
+    table->version = 1;
+    table->reserved04 = 1;
+
+    unsigned n = 0;
+    unsigned nonDfs40 = 0;
+    for (int i = 0; i < IEEE80211_CHAN_MAX && n < 400; i++) {
+        struct ieee80211_channel *ch = &ic->ic_channels[i];
+        if (!ch->ic_freq)
+            continue;
+        int channelNumber = ieee80211_chan2ieee(ic, ch);
+        if (channelNumber <= 0 || channelNumber > 255)
+            continue;
+        const bool dfs = (ch->ic_flags & IEEE80211_CHAN_DFS) != 0;
+        const bool passiveOnly = (ch->ic_flags & IEEE80211_CHAN_PASSIVE) != 0;
+        const bool ht40 = IEEE80211_IS_CHAN_HT40(ch) || IEEE80211_IS_CHAN_VHT40(ch);
+        const bool vht80 = IEEE80211_IS_CHAN_VHT80(ch);
+        table->chan_num[n] = static_cast<uint8_t>(channelNumber);
+        table->radar_dfs[n] = dfs ? 1 : 0;
+        table->passive[n] = passiveOnly ? 1 : 0;
+        table->support_40Mhz[n] = ht40 ? 1 : 0;
+        table->support_80Mhz[n] = vht80 ? 1 : 0;
+        if (!dfs && !passiveOnly && ht40)
+            nonDfs40++;
+        n++;
+    }
+    table->num_chan_specs = static_cast<uint16_t>(n);
+    setProperty("AIRPLAYChanIoctlNative207Count", (unsigned long long)n, 32);
+    setProperty("AIRPLAYChanIoctlNative207NonDFS40", (unsigned long long)nonDfs40, 32);
     return kIOReturnSuccess;
 }
 
@@ -879,7 +1453,13 @@ getMCS(struct apple80211_mcs_data* md)
     if (ic->ic_state != IEEE80211_S_RUN ||  ic->ic_bss == NULL || !md)
         return 6;
     md->version = APPLE80211_VERSION;
-    md->index = ic->ic_bss->ni_txmcs;
+    /* HE-PR1065: use the same freshness-selected HE MCS as the rate path.
+     * Only macOS reporting changes; never overwrite ni_txmcs (TX state).
+     */
+    uint32_t heMcs = 0;
+    md->index = (ic->ic_curmode == IEEE80211_MODE_11AX &&
+                 fHalService->getDriverInfo()->getFirmwareTxMcs(&heMcs)) ?
+                heMcs : ic->ic_bss->ni_txmcs;
     return kIOReturnSuccess;
 }
 
@@ -894,11 +1474,34 @@ getLINK_CHANGED_EVENT_DATA(struct apple80211_link_changed_event_data *ed)
     bzero(ed, sizeof(apple80211_link_changed_event_data));
     ed->isLinkDown = !(instance->currentStatus & kIONetworkLinkActive);
     if (ed->isLinkDown) {
-        ed->voluntary = disassocIsVoluntary;
+        /* SEQFIX: latched until the next link up, not cleared by setASSOCIATE */
+        /* INVOLFIX: byte 16 is isInvoluntary (airportd: !=0 -> "Unexpected link down", auto-join).
+         * Was set to 1 for downs macOS asked for (field misnamed "voluntary"). */
+        bool hostRequested = (gSeqVoluntaryDown != 0);
+        ed->isInvoluntary = !hostRequested;
         ed->reason = APPLE80211_LINK_DOWN_REASON_DEAUTH;
+        ed->subreason = (uint32_t)ic->ic_deauth_reason;
+        instance->setProperty("AIRPLAYSEQLastLinkDownInvoluntary",
+                              (unsigned long long)(ed->isInvoluntary ? 1 : 0), 32);
+        instance->setProperty("AIRPLAYSEQLastLinkDownSubreason",
+                              (unsigned long long)ed->subreason, 32);
+        if (hostRequested) {
+            UInt32 v = __sync_add_and_fetch(&gSeqDownVolReads, (UInt32)1);
+            instance->setProperty("AIRPLAYSEQLinkDownVoluntaryReads", (unsigned long long)v, 32);
+        } else {
+            UInt32 v = __sync_add_and_fetch(&gSeqDownInvolReads, (UInt32)1);
+            instance->setProperty("AIRPLAYSEQLinkDownInvoluntaryReads", (unsigned long long)v, 32);
+        }
+        instance->setProperty("AIRPLAYSEQLastLinkDownVoluntary",
+                              (unsigned long long)(hostRequested ? 1 : 0), 32);
+        instance->setProperty("AIRPLAYSEQLastDownReason",
+                              (unsigned long long)(UInt32)ic->ic_deauth_reason, 32);
     } else
         ed->rssi = -(0 - IWM_MIN_DBM - ic->ic_bss->ni_rssi);
-    XYLog("Link %s, reason: %d, voluntary: %d\n", ed->isLinkDown ? "down" : "up", ed->reason, ed->voluntary);
+    /* LINKEVTFIX: proves the fixed layout is in the loaded kext (24 = fixed, old = 20) */
+    instance->setProperty("AIRPLAYLinkEvtDataSize",
+                          (unsigned long long)sizeof(apple80211_link_changed_event_data), 32);
+    XYLog("Link %s, reason: %d, subreason: %d, involuntary: %d\n", ed->isLinkDown ? "down" : "up", ed->reason, ed->subreason, ed->isInvoluntary);
     return kIOReturnSuccess;
 }
 
@@ -918,10 +1521,44 @@ setSCAN_REQ(struct apple80211_scan_data *sd)
           sd->ssid,
           ether_sprintf(sd->bssid.octet));
 #endif
-    if (fScanResultWrapping)
+    /*
+     * SCANGUARD: as MILESTONE-REPRO (last build that switched networks well).
+     * While macOS is still reading the previous scan's results, refuse the new
+     * scan request instead of resetting the result cursor and starting another.
+     */
+    if (fScanResultWrapping) {
+        /*
+         * SCANHEAL-20261017: the wrapping latch must be able to self-clear.
+         * SCANGUARD refuses a new scan while macOS is still draining the prior
+         * results, but if macOS ABANDONS that drain (common during rapid network
+         * switching while AWDL is active) the latch would otherwise stick true
+         * forever and reject every future scan with 22, wedging Wi-Fi. If the latch
+         * has been held longer than a drain could reasonably take, treat it as
+         * abandoned: clear it, reset the cursor, and allow this scan. An active
+         * drain re-stamps within a few ms, so a live read is never cut off.
+         */
+        uint64_t heldMs = airport_up_time() - gScanWrapSetMs;
+        if (gScanWrapSetMs != 0 && heldMs >= 500) {
+            fScanResultWrapping = false;
+            fNextNodeToSend = NULL;
+            UInt32 h = __sync_add_and_fetch(&gScanHealReset, (UInt32)1);
+            instance->setProperty("AIRPLAYSCANHealReset", (unsigned long long)h, 32);
+            instance->setProperty("AIRPLAYSCANHealLastHeldMs", (unsigned long long)heldMs, 32);
+            /* fall through to normal scan handling below */
+        } else {
+            UInt32 w = __sync_add_and_fetch(&gScanGuardRejectWrapping, (UInt32)1);
+            instance->setProperty("AIRPLAYSCANRejectWrapping", (unsigned long long)w, 32);
+            return 22;
+        }
+    }
+    if (ic->ic_state <= IEEE80211_S_INIT) {
+        /* SEQFIX: make the "empty network list" wedge visible */
+        UInt32 r = __sync_add_and_fetch(&gSeqScanRejectInit, (UInt32)1);
+        instance->setProperty("AIRPLAYSCANRejectInit", (unsigned long long)r, 32);
+        instance->setProperty("AIRPLAYSCANRejectInitLast", (unsigned long long)1, 32);
         return 22;
-    if (ic->ic_state <= IEEE80211_S_INIT)
-        return 22;
+    }
+    instance->setProperty("AIRPLAYSCANRejectInitLast", (unsigned long long)0, 32);
     if (sd->scan_type == APPLE80211_SCAN_TYPE_FAST || sd->scan_type == APPLE80211_SCAN_TYPE_PASSIVE) {
         if (scanSource) {
             scanSource->setTimeoutMS(100);
@@ -950,15 +1587,15 @@ static int convertNodeToScanResult(ItlHalService *fHalService, struct ieee80211_
         result->asr_ie_len = 0;
     }
     result->asr_beacon_int = fNextNodeToSend->ni_intval;
+    result->asr_nrates = fNextNodeToSend->ni_rates.rs_nrates;
     for (int i = 0; i < result->asr_nrates; i++ )
         result->asr_rates[i] = fNextNodeToSend->ni_rates.rs_rates[i];
-    result->asr_nrates = fNextNodeToSend->ni_rates.rs_nrates;
     result->asr_age = (uint32_t)(airport_up_time() - fNextNodeToSend->ni_age_ts);
     result->asr_cap = fNextNodeToSend->ni_capinfo;
     result->asr_channel.version = APPLE80211_VERSION;
     result->asr_channel.channel = ieee80211_chan2ieee(fHalService->get80211Controller(), fNextNodeToSend->ni_chan);
     result->asr_channel.flags = ieeeChanFlag2appleScanFlagVentura(fNextNodeToSend->ni_chan->ic_flags);
-    result->asr_noise = -fHalService->getDriverInfo()->getBSSNoise();
+    result->asr_noise = fHalService->getDriverInfo()->getBSSNoise(); /* NOISEFIX: already dBm (negative), no sign flip */
     result->asr_rssi = -(0 - IWM_MIN_DBM - fNextNodeToSend->ni_rssi);
     memcpy(result->asr_bssid, fNextNodeToSend->ni_bssid, IEEE80211_ADDR_LEN);
     result->asr_ssid_len = fNextNodeToSend->ni_esslen;
@@ -998,13 +1635,24 @@ getSCAN_RESULT(struct apple80211_scan_result *sr)
                 return 5;
             }
         }
+    } else if (RB_FIND(ieee80211_tree,
+                       &fHalService->get80211Controller()->ic_tree,
+                       fNextNodeToSend) != fNextNodeToSend) {
+        fNextNodeToSend = RB_MIN(ieee80211_tree,
+                                &fHalService->get80211Controller()->ic_tree);
+        if (fNextNodeToSend == NULL) {
+            fScanResultWrapping = false;
+            return 5;
+        }
     }
 //    XYLog("%s ni_bssid=%s ni_essid=%s channel=%d flags=%d asr_cap=%d asr_nrates=%d asr_ssid_len=%d asr_ie_len=%d asr_rssi=%d\n", __FUNCTION__, ether_sprintf(fNextNodeToSend->ni_bssid), fNextNodeToSend->ni_essid, ieee80211_chan2ieee(ic, fNextNodeToSend->ni_chan), ieeeChanFlag2apple(fNextNodeToSend->ni_chan->ic_flags, -1), fNextNodeToSend->ni_capinfo, fNextNodeToSend->ni_rates.rs_nrates, fNextNodeToSend->ni_esslen, fNextNodeToSend->ni_rsnie_tlv == NULL ? 0 : fNextNodeToSend->ni_rsnie_tlv_len, fNextNodeToSend->ni_rssi);
     convertNodeToScanResult(fHalService, fNextNodeToSend, sr);
     
     fNextNodeToSend = RB_NEXT(ieee80211_tree, &HalService->get80211Controller()->ic_tree, fNextNodeToSend);
-    if (fNextNodeToSend == NULL)
+    if (fNextNodeToSend == NULL) {
         fScanResultWrapping = true;
+        gScanWrapSetMs = airport_up_time(); /* SCANHEAL-20261017 */
+    }
 
     return kIOReturnSuccess;
 }

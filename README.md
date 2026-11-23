@@ -1,376 +1,183 @@
+# ReAWDL v3.6
 
-# Sonoma ReAWDL Project
+**Intel AX210 — Enhanced Wi-Fi 6, freshness-aware PHY-rate reporting, and experimental native AWDL for macOS Sonoma**
 
-### Experimental Intel Wi-Fi 6 Support for Apple Wireless Direct Link (AWDL) on macOS Sonoma
+*README updated November 22, 2026 · HE-PR1066 Sonoma Debug build PASS · Standalone Wi-Fi 6 branch build PASS · Release build and independent standalone runtime validation pending*
 
-ReAWDL is an experimental modification of the [OpenIntelWireless AirportItlwm](https://github.com/OpenIntelWireless/itlwm) driver, primarily developed for the **Intel AX210 Wi-Fi 6E** chipset under macOS Sonoma.
+## Overview
 
-The original goal was to enable native Apple Wireless Direct Link (AWDL) functionality on Intel Wi-Fi hardware, allowing direct communication with Apple devices without requiring a conventional shared Wi-Fi network.
+ReAWDL is an experimental modification of AirportItlwm, originally developed to investigate native Apple Wireless Direct Link (AWDL) support on Intel wireless hardware. Extensive work on firmware integration, peer discovery, packet handling, and driver reliability also created opportunities to improve ordinary infrastructure Wi-Fi.
 
-The ultimate objectives included **AirDrop, peer-to-peer AirPlay, native device discovery, and reliable bidirectional wireless communication**, without compromising ordinary Wi-Fi connectivity.
+**ReAWDL v3.6 now emphasizes everyday Wi-Fi 6 performance, reliable connectivity, and trustworthy link-rate reporting.** The HE-PR1063 through HE-PR1065 development sequence added independent Intel firmware-rate diagnostics and a runtime-tested freshness-aware display path. The follow-on HE-PR1066 source revision makes freshness-aware reporting the default, with detailed diagnostic data remaining optional. These changes build on the existing 802.11ax improvements without modifying Intel's firmware rate-control decisions.
 
-Although complete compatibility was not achieved, the project made substantial progress in driver functionality, packet handling, firmware integration, and stability.
+Active development of new AirDrop/AWDL functionality is paused for the foreseeable future. Existing experimental AWDL functionality and previous reliability improvements remain in the project.
 
-**Latest release:** [ReAWDL v3.6 — Releases](https://github.com/maddog860/Sonoma-ReAWDL-Project/releases)
+## What's New in v3.6 — November Wi-Fi 6 Update
 
-**Project Status:** Development concluded. Source code preserved for reference, research, and possible future community contributions.
+### Native 802.11ax connectivity and HE rate decoding
 
----
+- **Wi-Fi 6 on Intel AX210:** Native 802.11ax infrastructure connectivity demonstrated under macOS Sonoma using the modified AirportItlwm 2.4.0 driver.
+- **80 MHz and 160 MHz operation:** Tested on 5 GHz networks. At 80 MHz, reported rates reached approximately **1,200 Mbps**; earlier limited 160 MHz testing reached approximately **2,401 Mbps** on a 2×2 connection.
+- **Firmware-informed HE rates:** The initial Wi-Fi 6 reporting fix decodes firmware TLC rate notifications using MCS, channel width, spatial-stream count, and HE guard interval instead of assuming a fixed maximum.
+- **Meaningful rate changes:** Testing observed valid HE80 combinations including **245 Mbps / MCS 3**, **1,020 Mbps / MCS 11**, and **1,200 Mbps / MCS 11**. The latter two are consistent with different HE guard intervals.
 
-## Project Overview
+### HE-PR1063 — Independent firmware-rate witnesses
 
-Apple Wireless Direct Link is the peer-to-peer wireless technology used by Apple features such as AirDrop and certain AirPlay workflows.
+The first rate-probe build added optional, passive, Debug-only diagnostics under `-itlwm-herate`. It separately observes:
 
-Establishing a native `awdl0` interface is only one part of supporting AWDL. Complete interoperability also requires appropriate management frames, radio scheduling, channel coordination, peer discovery, and reliable bidirectional data transfer.
+1. **TLC-selected initial rate** from Intel firmware notifications.
+2. **Successful infrastructure single-frame TX rate** from firmware transmission completions.
+3. **Aggregated TX rate** from Block ACK notifications, retained as raw diagnostic data pending validation.
 
-ReAWDL investigated these requirements using Intel firmware capabilities alongside Apple's **IO80211** and **Skywalk** networking frameworks.
+In a live AX210 test, macOS continued to display **245 Mbps / MCS 3** while the successful single-frame completion witness reported a **1,200 Mbps / MCS 11** HE rate. During a subsequent LAN test, the qualifying single-frame completion counter increased by **150** while the TLC notification count stayed unchanged. This demonstrated that the TLC-based display could lag at least some actual successful transmissions; it did **not** establish that all traffic was running at 1,200 Mbps.
 
-### Original Project Objectives
+### HE-PR1064 — Freshness-aware rate display
 
-- Establish a native `awdl0` interface on Intel Wi-Fi hardware.
-- Enable discovery and direct communication with Apple devices without a shared wireless network.
-- Support peer-to-peer AirPlay and ultimately complete AirDrop file transfers.
-- Provide reliable bidirectional communication.
-- Preserve ordinary infrastructure Wi-Fi functionality.
+The next experimental fix introduced the separate `-itlwm-hefresh` flag, used **together with** `-itlwm-herate` in the tested Debug build.
 
----
+- Prefers a **recent, validated, successful infrastructure single-frame TX rate** when its sample is less than **three seconds old** and belongs to the current connection/firmware generation.
+- **Falls back to the firmware TLC-selected rate** when a completion sample is stale, missing, or invalid; it does not manufacture a maximum PHY rate.
+- Adds a corresponding firmware-derived MCS accessor without altering `ni_txmcs`, which is used elsewhere inside the driver.
+- Retains the Block ACK rate witness for investigation rather than using unverified aggregated-rate data to drive the macOS display.
+- Leaves firmware commands, rate selection, transmit queues, DMA handling, and AWDL behavior unchanged.
 
-## What the Project Achieved
-### WIFI 6 Support
+The first runtime test showed **1,200 Mbps with MCS 3** in macOS: the new transmit-rate path was active, but one MCS reporting interface was still returning the older TLC-derived index.
 
-Added Wi-Fi 6 (802.11ax) support for compatible Intel wireless adapters, including HE capability negotiation, 160 MHz channel operation, and MCS/rate handling. Implemented firmware-based transmit-rate reporting, allowing macOS to display Wi-Fi 6 link speeds up to 2,401 Mbps on the Intel AX210. These capabilities work independently of experimental AWDL modifications.
+### HE-PR1065 — MCS reporting alignment
 
-### Native AWDL Integration
+HE-PR1065 corrects that mismatch by updating the separate `getMCS()` entry points in both the legacy and Skywalk AirportItlwm reporting interfaces, complementing the already-updated `getMCS_VHT()` paths. Under eligible freshness conditions, macOS can obtain the MCS from the same selected firmware sample used for the PHY rate.
 
-The project successfully established a native `awdl0` interface through Apple's IO80211 and Skywalk networking frameworks.
+**Source checks and Sonoma Debug compilation passed.** After installation, the developer reported maximum PHY-rate reporting and a successful reconnect at that rate after changing the router to another channel **without disabling and re-enabling Wi-Fi**. This is encouraging runtime evidence for the reporting fix, not a proof of permanent peak throughput or broad router compatibility.
 
-Implemented functionality included interface registration, state management, IPv6 link-local networking, and native packet transmission and reception pathways.
+### HE-PR1066 — Freshness reporting built in
 
-This represented meaningful integration with Apple's networking architecture rather than simply displaying a virtual interface.
+For the next release build, the freshness fix is now **default-on in source** for supported Intel AX210 infrastructure connections using 802.11ax, in both Debug and Release configurations. It no longer requires `-itlwm-hefresh` or the diagnostic `-itlwm-herate` boot flag to collect the compact successful-TX evidence used for reporting. The code retains the three-second sample validity window, connection-generation and channel-width checks, and TLC fallback when recent completed-TX evidence is absent. **No firmware TX-rate-control behavior is changed.**
 
-### AWDL Discovery and Synchronization
+The detailed firmware witness/IORegistry data is still optional in compatible Debug builds via `-itlwm-herate`. A new rollback flag, **`-itlwm-hefreshoff`**, disables freshness-aware reporting and restores TLC-only reporting in HE-PR1066 builds. The earlier `-itlwm-hefresh` flag was required in HE-PR1064/1065 but is unnecessary in HE-PR1066.
 
-Experimental support was developed for AWDL management frames, radio scheduling, channel alignment, and secondary Intel MAC/PHY operation.
+**Release status:** The complete HE-PR1066 source passed **21/21 structural checks**, **13/13 policy tests**, and **Sonoma14.4 Debug compilation** on the developer’s Mac. The independent eight-file `wifi6-he-fix` adaptation also passed **23/23 source checks**, **13/13 policy tests**, **12/12 decoder tests**, and a standalone Sonoma14.4 Debug compilation; it was published as commit `38a9bb4`. HE-PR1065 has the clearest documented on-device rate-reporting observations. Independent runtime testing of the standalone patch and a Release-build validation are still pending.
 
-A historical diagnostic capture demonstrated:
+## Performance and Validation
 
-| Diagnostic | Recorded Result |
+| Observation | Result / qualification |
 |---|---|
-| AWDL presence/synchronization frame submissions | 5,259 |
-| Reported submission errors | 0 |
-| P2P session-rearm events | 5,083 |
-| AWDL management and multicast reception | Demonstrated |
-| Apple-device peer discovery | Observed during testing |
+| Primary tested adapter | Intel AX210 (2×2) |
+| OS / driver | macOS Sonoma; modified AirportItlwm 2.4.0 |
+| PHY mode | 802.11ax (Wi-Fi 6) |
+| 5 GHz, 80 MHz | Up to ~1,200 Mbps reported; MCS 11 demonstrated |
+| 5 GHz, 160 MHz | Up to ~2,401 Mbps reported in earlier limited testing |
+| Firmware-rate differential | TLC display 245 Mbps vs. successful single-frame witness 1,200 Mbps |
+| Controlled local ping (20 packets, 1-second interval) | 0% loss; 1.666 ms average; 2.168 ms maximum |
+| Router channel change after HE-PR1065 | Rejoined with maximum reported rate; no manual Wi-Fi toggle needed in the observed test |
+| Qualified aggregate-rate samples | Not yet observed in the HE-PR1063 runtime capture (`BACount = 0`) |
 
-These results established meaningful AWDL activity, although they did not prove successful bidirectional communication or complete AirDrop functionality.
+Earlier wireless analysis also observed strong signal quality (approximately **−33 dBm**, with a reported noise floor near **−96 dBm**) and promising Speedtest results relative to the previously used Broadcom BCM94360NG under those particular conditions. These comparisons were not controlled, repeatable head-to-head throughput benchmarks.
 
-### MAC Address Synchronization
+**PHY link rate is not real-world download, upload, or file-transfer throughput.** A successful 1,200 Mbps single-frame completion is meaningful firmware evidence, but it is not proof that all frames—or aggregated high-volume traffic—used that rate.
 
-The driver gained the ability to synchronize Intel firmware **MAC1** with Apple's live `awdl0` hardware address.
+## Reliability and Driver Improvements
 
-Runtime diagnostics confirmed matching addresses, resolving an important identity-consistency issue in the tested configuration.
+The release retains prior work in:
 
-This work helped establish a more consistent relationship between Apple's virtual AWDL interface and the Intel firmware radio context.
+- Transmission queue management, packet ownership, and deferred processing.
+- DMA mapping, cleanup, and safer completion handling.
+- Firmware command tracking, error handling, and recovery.
+- Reset handling, generation checks, and stale-operation safeguards.
+- Targeted bounds checks, input validation, and memory-safety improvements.
+- Native macOS Wi-Fi interface integration.
+- Experimental AWDL synchronization, scheduling, and peer discovery.
 
-### Functional AWDL Multicast Reception
+The latest HE reporting improvements are intentionally **observational**: they do not force a higher Wi-Fi transmission rate or alter Intel firmware's adaptation policy.
 
-The project achieved native AWDL multicast packet delivery through Apple's Skywalk networking stack.
+## Demonstrated Functionality
 
-A receive-path correction also addressed unsafe packet handling associated with earlier system instability.
-
-This demonstrated meaningful progress beyond management-frame transmission alone.
-
-### Partial Peer-to-Peer AirPlay
-
-An iPhone successfully initiated media playback through the experimental Intel setup without requiring a shared infrastructure Wi-Fi network.
-
-However, playback controls such as pause, seek, and track skipping did not reliably synchronize.
-
-This demonstrated **partial AirPlay functionality**, not complete compatibility.
-
-### Driver Reliability and Diagnostics
-
-Additional development addressed several important areas of driver reliability:
-
-- DMA buffer mapping and resource management.
-- Packet ownership and cleanup.
-- Firmware command tracking and completion handling.
-- Deferred transmission processing.
-- Queue ownership and lifecycle safeguards.
-- Reset recovery and prevention of stale operations.
-- Peer-to-peer radio scheduling and firmware diagnostics.
-- Input validation and memory-safety improvements.
-
-The project also introduced expanded diagnostics capable of displaying:
-
-- Intel Wi-Fi hardware model and capabilities.
-- Actual loaded Intel firmware image and version.
-- Firmware command capabilities.
-- AWDL radio scheduling and session activity.
-- Transmission and reception statistics.
-- Packet completion and firmware error information.
-
-Detailed instrumentation can be enabled using the optional boot argument:
-
-`-itlwm-diag`
-
-Obsolete experimental firmware snapshot instrumentation was removed from the final source.
-
----
-
-## Performance and Functionality Improvements
-
-The project's primary gains involved **new functionality, improved packet-handling correctness, and specific reliability improvements**, rather than increased raw wireless speed.
-
-| Area | Result |
+| Capability | Current status |
 |---|---|
-| Native AWDL interface | Operational |
-| AWDL management-frame activity | Demonstrated |
-| P2P firmware session scheduling | Operational in recorded tests |
-| AWDL multicast reception | Functional |
-| Firmware MAC synchronization | Confirmed |
-| Apple-device discovery | Demonstrated |
-| Sleep/wake discovery recovery | Observed in final testing |
-| Peer-to-peer AirPlay | Partially functional |
-| Packet handling and recovery | Improved |
-| Hardware and firmware diagnostics | Significantly expanded |
-| Ordinary infrastructure Wi-Fi | Functional during successful tests |
+| Native macOS Wi-Fi interface and infrastructure connectivity | Working on tested AX210 |
+| Wi-Fi 6 / 802.11ax | Confirmed |
+| 5 GHz / 80 MHz and 160 MHz | Confirmed in limited configurations |
+| HE MCS 11 and 80 MHz rates up to ~1,200 Mbps | Observed |
+| 160 MHz reported PHY rate up to ~2,401 Mbps | Observed in earlier testing |
+| Firmware TLC rate decoding | Implemented and runtime-observed |
+| Independent single-frame completion rate witness | Runtime-observed |
+| Freshness-aware HE rate/MCS reporting (HE-PR1065) | Runtime-tested with promising results |
+| Default-on freshness reporting (HE-PR1066) | Sonoma Debug compilation passed; standalone runtime and Release verification pending |
+| Accurate aggregate-based rate reporting | Not yet validated |
+| Normal-interval local network latency | Good in tested conditions |
+| Native `awdl0` interface and AWDL firmware session scheduling | Demonstrated |
+| AWDL management transmission and multicast reception | Demonstrated |
+| Apple peer discovery | Demonstrated intermittently |
+| Complete native AirDrop file transfer | Not demonstrated |
 
-### Wireless Performance
+## Boot Arguments
 
-Ordinary infrastructure Wi-Fi remained functional throughout successful development testing.
+### New default-on firmware reporting (HE-PR1066)
 
-No controlled improvement in Wi-Fi throughput, latency, or battery efficiency was established.
+**No special boot argument is required for freshness-aware Wi-Fi 6 reporting** in the HE-PR1066 source revision. On the supported AX210/802.11ax infrastructure path, the driver automatically prefers a validated successful single-frame completion observed within three seconds; it falls back to the firmware TLC-selected rate if the recent sample is missing, invalid, or too old.
 
-Performance gains should therefore be understood primarily as improvements in **driver functionality, reliability, and experimental AWDL capabilities**.
+These flags are **optional**, not prerequisites for normal Wi-Fi 6 operation:
 
----
+- **`-itlwm-herate`** — enables extended firmware-rate witnesses in compatible **Debug** builds, including raw TLC notifications, successful single-frame TX completion evidence, and raw Block ACK rate observations. Intended for troubleshooting; not required for the default reporting fix.
+- **`-itlwm-hefreshoff`** — explicitly disables freshness-aware reporting in **HE-PR1066 builds** and uses the older TLC-only display path. Useful for controlled comparisons and rollback.
+- **`-itlwm-diag`** — separate, opt-in broader driver/AWDL diagnostics. Not required for Wi-Fi 6.
+- **`-awdlexp`** — experimental AWDL firmware integration where supported. Independent of the Wi-Fi 6 rate-reporting fix.
 
-## Remaining Limitations
+**Earlier HE-PR1064/1065 Debug binaries still require both `-itlwm-herate` and `-itlwm-hefresh` to activate the experimental freshness path.** The default-on behavior is a source change for HE-PR1066 and does not retroactively change those installed binaries. `-itlwm-hefresh` is no longer required in HE-PR1066. Only add flags that the specific kext version supports; retain existing unrelated OpenCore arguments.
 
-Despite considerable development, several important challenges remained unresolved.
+### Checking optional firmware witnesses
 
-### Bidirectional Unicast Communication
+When `-itlwm-herate` is enabled with a compatible Debug kext:
 
-The driver could transmit AWDL management frames and receive multicast traffic, but reliable peer-directed unicast communication was not achieved.
+```bash
+kmutil showloaded 2>/dev/null | grep -i AirportItlwm
+ioreg -l -w0 | grep -E '"HEPR106(3|4)' | sort
+system_profiler SPAirPortDataType | \
+  grep -E 'PHY Mode:|Channel:|Transmit Rate:|MCS Index:' | head -4
+```
 
-One experiment recorded 505 unicast transmission attempts reaching the Intel firmware retry limit.
+The `HEPR1063TlcRaw`, `HEPR1063SingleRaw`, and `HEPR1063BARaw` fields are raw firmware witnesses. `HEPR1064LastSource` is `0` for TLC fallback and `1` for a recent qualified single-frame sample. IORegistry publication is periodic, so those properties may lag individual reporting calls. Raw rates are not automatically sustained-throughput measurements.
 
-The most significant unresolved challenge was establishing a dependable bidirectional AWDL unicast data path integrated with Apple's native networking services.
+## Known Limitations
 
-### Complete AirDrop Compatibility
+- **Experimental scope:** HE-PR1065 on-device results and HE-PR1066 Debug compilation are preliminary and focused on the AX210 under Sonoma; compatibility with other adapters, routers, and macOS versions remains unverified.
+- **Freshness is conditional even when enabled by default:** A successful single-frame completion is only used for a short validity window. During idle periods, the display may fall back to the older TLC rate, which itself can lag firmware adaptation.
+- **Persistent maximum is not a guarantee:** A 1,200 Mbps display across channel changes is encouraging but does not prove continuous live-rate accuracy, sustained throughput, or correct downward adjustments; all require further tests.
+- **Rate/MCS queries are separate:** macOS may request them at slightly different times. A sample expiring between requests can still cause a momentary mismatch, even after HE-PR1065.
+- **Aggregated TX:** The Block ACK structure exposes a `tx_rate` field, but qualifying live samples and exact encoding have not yet been validated. High-throughput, aggregate-heavy behavior still needs measurement.
+- **Actual throughput:** No comprehensive sustained LAN throughput benchmark, cross-router compatibility suite, or prolonged sleep/wake validation is claimed for the new freshness fix.
+- **160 MHz:** Functional in limited tests, but router- and environment-dependent; 80 MHz remains a practical configuration.
+- **Wi-Fi 6E / 6 GHz:** No claim of validated 6 GHz operation is made by this release.
+- **AWDL / AirDrop:** Complete AirDrop transfers remain unfinished. Peer discovery and advertising can be intermittent; recent testing identified dependence on an active 5 GHz infrastructure connection for advertising in the current experimental implementation. Earlier source snapshots exist for separate investigation. Station-3 work should not be mistaken for finished AWDL unicast support.
+- **Sleep/wake:** Reliable post-wake AWDL advertising and repeated long-term Wi-Fi reliability still need further validation.
 
-Native AWDL discovery and synchronization were demonstrated, but no complete Intel-to-Apple or Apple-to-Intel AirDrop file transfer was successfully demonstrated.
+The project is best understood as an enhanced experimental Intel Wi-Fi driver with optional AWDL research functionality—not a finished AirDrop implementation.
 
-Receiving AWDL advertisements or discovering another device does not necessarily establish a working AirDrop connection.
+## Included Utility — `intel_wifi_hardware_firmware.py`
 
-### AirPlay Compatibility
+The read-only macOS Python utility reports the Intel adapter model, loaded firmware, negotiated wireless standard, operating channel and bandwidth, and available PHY link-rate information. It is intended to describe actual observed operating capabilities rather than theoretical marketing specifications. It avoids displaying personal directory paths, Wi-Fi network names, and MAC addresses, and can include additional ReAWDL diagnostics when available.
 
-Initial peer-to-peer playback worked in certain experiments, but media controls and session synchronization remained unreliable.
+## Future Development
 
-### Independent Firmware Transmit Queue
+Future updates may address Wi-Fi reliability, firmware diagnostics, compatibility, security hardening, and support for additional hardware. The immediate technical opportunities are to validate aggregate-rate telemetry, improve rate/MCS sampling consistency across idle periods and reconnects, and measure actual sustained throughput without sacrificing stable ordinary Wi-Fi behavior.
 
-Station-3 queue ownership safeguards were developed, but independent private firmware transmission remained gated and was not enabled as a completed feature.
+Active development of new AWDL/AirDrop features remains paused. Existing experiments may be maintained, but further releases are not contingent on completing AirDrop.
 
-### Additional Compatibility Testing
+## Credits & Acknowledgments
 
-Broad compatibility across different Intel wireless devices, arbitrary-channel coexistence, and all possible operating conditions was not fully validated.
+**BringBackPhysicalMedia (GitHub)** — Project direction, extensive testing, experimental design, troubleshooting, performance evaluation, and validation of driver changes.
 
-| Feature | Final Status |
-|---|---|
-| Infrastructure Wi-Fi | Demonstrated |
-| Native `awdl0` interface | Operational |
-| AWDL management-frame activity | Demonstrated |
-| AWDL multicast reception | Demonstrated |
-| P2P session management | Demonstrated |
-| Apple-device discovery | Demonstrated in testing |
-| Sleep/wake discovery recovery | Observed |
-| Reliable AWDL unicast data delivery | Not demonstrated |
-| Complete AirDrop file transfer | Not demonstrated |
-| Fully synchronized peer-to-peer AirPlay | Not achieved |
-| Independent station-3 firmware TX queue | Not enabled |
+**KGP (GitHub)** — Intel driver engineering references that informed improvements involving DMA buffer mapping, packet ownership and cleanup, deferred queue recovery, firmware command lifetimes, reset safeguards, and Apple-compatible peer-to-peer interface lifecycle management.
 
----
+**OpenIntelWireless** — The original AirportItlwm project and its contributors provided the foundational Intel Wi-Fi driver on which ReAWDL was developed.
 
-## Final Project Outcome
+**Linux AirDrop Project — `airdrop-mt7921`** — Protocol research that informed investigation of AWDL MAC identity synchronization, peer-to-peer operation, radio channel alignment, synchronization timing, and the distinction between peer discovery and successful data transfer. Its implementation targets different hardware.
 
-Sonoma ReAWDL did not achieve complete AirDrop compatibility, but it progressed substantially beyond simply exposing an AWDL interface.
+**Artificial Intelligence — AI-assisted development** — AI coding assistants contributed substantial experimental project-specific code, tooling, source analysis, debugging support, firmware research, and documentation. Human-directed testing, observations, and engineering decisions guided the work.
 
-The project demonstrated:
+## Closing Notes
 
-- Native Apple-compatible AWDL interface integration.
-- AWDL management-frame activity and synchronization.
-- Multicast packet reception and delivery.
-- Experimental peer-to-peer firmware scheduling.
-- Firmware MAC address synchronization.
-- Apple-device discovery.
-- Partial peer-to-peer AirPlay functionality.
-- Meaningful packet-handling and reliability improvements.
-- Expanded Intel hardware and firmware diagnostics.
+ReAWDL began as an effort to bring native AWDL functionality to Intel wireless hardware. Although complete AirDrop functionality remains unfinished, the project has produced useful driver reliability improvements, experimental native-interface work, and a new set of firmware-based Wi-Fi 6 reporting capabilities.
 
-The resulting source code remains a valuable experimental foundation for understanding and extending Apple-compatible peer-to-peer wireless networking on Intel hardware.
+The November HE-PR1063–1066 work illustrates the project's current direction: investigate with independent firmware evidence, make narrowly scoped changes, preserve rollback checkpoints, and prioritize the everyday wireless experience.
 
-**Project Status:** Development concluded. The final source is available for reference, research, and potential community contributions.
-
----
-
-# Credits & Acknowledgments
-
-This project builds upon the work of the OpenIntelWireless community and several independent efforts to understand and implement Apple Wireless Direct Link.
-
-Special thanks go to the developers and researchers whose work helped make these Intel Wi-Fi experiments possible.
-
-## Project Development
-
-### BringBackPhysicalMedia (Maddog860)
-
-Project direction, extensive hardware testing, experimental design, troubleshooting, and validation of driver changes.
-
-Contributions included investigating native AWDL interface creation, identifying functional limitations, interpreting real-world results, and guiding development toward Apple-compatible peer-to-peer Wi-Fi operation.
-
-### Artificial Intelligence — AI-Assisted Development
-
-AI coding assistants, including **OpenAI ChatGPT, Anthropic Claude, and Mistral AI**, generated much of the project's experimental code, modifications, instrumentation, and diagnostic tooling.
-
-AI assistance also contributed to source analysis, firmware research, debugging strategies, and documentation.
-
-Development was directed and validated through human testing.
-
-This acknowledgment applies to ReAWDL-specific development, not the original code written by upstream developers.
-
----
-
-## Original Driver and Technical Foundations
-
-### [OpenIntelWireless / itlwm](https://github.com/OpenIntelWireless/itlwm)
-
-The original Intel Wi-Fi driver for macOS and the foundation of this project.
-
-Credit goes to zxystd and the OpenIntelWireless contributors for the driver architecture, hardware support, and years of development.
-
-### [OpenBSD](https://www.openbsd.org/)
-
-An important source of networking and Intel wireless driver foundations used by itlwm, including `net80211`, `iwn`, `iwm`, and `iwx`.
-
-### [Acidanthera / MacKernelSDK](https://github.com/acidanthera/MacKernelSDK)
-
-Kernel development headers and supporting components used to build the macOS driver.
-
-### [Intel / Linux iwlwifi](https://wireless.docs.kernel.org/en/latest/en/users/drivers/iwlwifi.html)
-
-An important technical reference for Intel firmware commands, station contexts, transmit queues, firmware interfaces, and device behavior.
-
-Intel wireless firmware and documentation also provided essential information for understanding AX210 hardware operation.
-
----
-
-## KGP — Intel Driver Engineering Reference
-
-### [KGP / GitHub](https://github.com/kgp-macPro/)
-
-KGP's AirportItlwm development provided valuable implementation references for improving driver reliability, particularly lower-level packet handling and firmware operation management.
-
-| Area | Contribution to Our Research |
-|---|---|
-| Packet transmission | DMA buffer mapping, packet ownership, and safe resource cleanup |
-| Queue management | Deferred processing when the driver cannot immediately acquire its workloop |
-| Firmware commands | Command-slot tracking, command lifetimes, and completion safety |
-| Reset recovery | Preventing stale operations and queued work from crossing reset boundaries |
-| AWDL interface lifecycle | Reference approaches for creating, attaching, enabling, and publishing Apple-compatible P2P interfaces |
-
-The deferred-drain and workloop-handling mechanisms were particularly useful references during our management-frame transmission investigations.
-
-KGP's Tahoe implementation uses a different macOS wireless framework architecture from our Sonoma Skywalk-based implementation.
-
-We studied and adapted relevant engineering approaches rather than treating it as a direct replacement.
-
-We also appreciate KGP's acknowledgment of Maddog860's earlier work on direct AWDL virtual-interface registration.
-
----
-
-## Linux AirDrop Project — AWDL Protocol Research
-
-### [jedbillyb / airdrop-mt7921](https://github.com/jedbillyb/airdrop-mt7921)
-
-This project was an especially valuable reference for understanding how a non-Apple Wi-Fi chipset can communicate using Apple's AWDL protocol.
-
-Although it targets MediaTek hardware rather than Intel, its practical experiments and documentation helped guide several aspects of our AX210 investigation.
-
-### AWDL MAC Identity Synchronization
-
-The Linux research reinforced the importance of maintaining a consistent identity between the virtual AWDL interface and its underlying radio context.
-
-Our Intel implementation subsequently synchronized firmware MAC1 with Apple's live `awdl0` address, with matching addresses confirmed in runtime diagnostics.
-
-### Independent Peer-to-Peer Operation
-
-The Linux project demonstrated alternative P2P radio configurations operating alongside ordinary Wi-Fi.
-
-This informed our investigation of Intel MAC1, PHY2, firmware bindings, and P2P session scheduling.
-
-### Actual Radio-Channel Selection
-
-Its experiments highlighted why a requested channel does not always represent the channel actually used by the radio.
-
-This was particularly relevant to discovery investigations involving channels 6 and 149.
-
-### AWDL Synchronization and Availability Windows
-
-We studied its channel sequences, synchronization offsets, peer election, channel alignment, and transmission timing.
-
-These concepts helped guide our scheduling and synchronization investigations.
-
-### Discovery Versus Data Transfer
-
-The Linux work reinforced the distinction between receiving AWDL advertisements, discovering another device, establishing bidirectional networking, and completing an actual AirDrop transfer.
-
-This distinction helped structure our diagnostics around meaningful functional milestones.
-
-The Linux implementation served as a protocol and engineering reference. Its MediaTek-specific driver code was not directly transplanted into our Intel driver.
-
----
-
-## Additional AWDL Research and Open-Source Projects
-
-### [Open Wireless Link (OWL) — SEEMOO Lab](https://github.com/seemoo-lab/owl)
-
-An open-source implementation of Apple's AWDL protocol.
-
-Its research into peer discovery, synchronization, master election, channel sequences, frame construction, and IPv6 networking helped establish important technical foundations for understanding AWDL outside Apple's hardware ecosystem.
-
-OWL also underpins the Linux AirDrop implementation referenced above.
-
-### [OpenDrop — SEEMOO Lab](https://github.com/seemoo-lab/opendrop)
-
-An open-source AirDrop implementation demonstrating the higher-level file-transfer protocol operating over an AWDL network.
-
-It provides important context for distinguishing link-layer functionality from complete AirDrop compatibility.
-
-These projects represent valuable independent research into Apple's wireless protocols.
-
----
-
-## Acknowledgment of Upstream Contributors
-
-Additional recognition belongs to the many developers credited by the original OpenIntelWireless project, including those responsible for macOS wireless compatibility, Intel device support, firmware integration, network-stack adaptation, and bug fixes.
-
-Their contributions remain part of the foundation on which this experimental work was built.
-
----
-
-## Project Scope and Disclaimer
-
-Sonoma ReAWDL is an independent, experimental Intel Wi-Fi development project.
-
-The work described here involves a mixture of upstream open-source code, engineering references, protocol research, AI-assisted development, and physical hardware testing.
-
-Acknowledging a project as a technical reference does not necessarily imply that its source code was directly incorporated.
-
-Likewise, successful AWDL interface creation, peer discovery, or synchronization should not be interpreted as proof of complete AirDrop functionality.
-
-This project is not affiliated with or endorsed by Apple, Intel, OpenIntelWireless, KGP, or any of the other projects acknowledged here.
-
----
-
-### Dedicated to my Mom
-
+**Dedicated to my Mom.**

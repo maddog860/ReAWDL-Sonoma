@@ -604,16 +604,36 @@ struct apple80211_scan_multiple_data
 
 static_assert(__offsetof(struct apple80211_scan_multiple_data, bssid_count) == 0x19c, "zxystd: BSSID offset invalid");
 
+/*
+ * INVOLFIX-20261010: real layout from Sonoma 14.x IO80211Family + airportd disassembly.
+ *  IO80211InfraInterface::setLinkState: 32-byte local, driver fills it via ioctl 156,
+ *  setLinkStateInternal writes [0x1c] debounce / [0x1d] debounce-failed, then IO80211 posts
+ *  APPLE80211_M_LINK_CHANGED with TLV {0xe, 0x20, data[32]}.
+ *  airportd _handleLinkEvent: "Unexpected link down. Triggering auto-join" when
+ *  isLinkDown && byte[0x10] != 0  -> byte 16 is isInvoluntary (WiFiUsageMonitor isInvoluntary:),
+ *  NOT "voluntary". subreason = u32 @0x18 (airportd logged 0xAAAAAAAA = IO80211 pre-fill, never written).
+ */
 struct apple80211_link_changed_event_data
 {
-    bool       isLinkDown; // 0
-    uint32_t   rssi;       // 4
-    uint16_t   snr;        // 8
-    uint16_t   nf;         // 10
-    char       cca;        // 12
-    bool       voluntary;  // 16
-    uint32_t   reason;     // 20
+    bool       isLinkDown;      // 0
+    uint32_t   rssi;            // 4
+    uint16_t   snr;             // 8
+    uint16_t   nf;              // 10
+    char       cca;             // 12
+    uint8_t    _pad13[3];       // 13..15
+    bool       isInvoluntary;   // 16  1 = drop macOS did not ask for -> airportd auto-join
+    uint8_t    _pad17[3];       // 17..19
+    uint32_t   reason;          // 20  APPLE80211_LINK_DOWN_REASON_*
+    uint32_t   subreason;       // 24  802.11 reason code
+    bool       debounce;        // 28  set by IO80211 (setLinkStateInternal)
+    bool       debounceFailed;  // 29  set by IO80211
+    uint8_t    _pad30[2];       // 30..31
 };
+static_assert(__offsetof(struct apple80211_link_changed_event_data, isInvoluntary) == 16, "INVOLFIX: isInvoluntary offset");
+static_assert(__offsetof(struct apple80211_link_changed_event_data, reason) == 20, "INVOLFIX: reason offset");
+static_assert(__offsetof(struct apple80211_link_changed_event_data, subreason) == 24, "INVOLFIX: subreason offset");
+static_assert(__offsetof(struct apple80211_link_changed_event_data, debounce) == 28, "INVOLFIX: debounce offset");
+static_assert(sizeof(struct apple80211_link_changed_event_data) == 32, "INVOLFIX: size");
 
 struct apple80211_apmode_data
 {
