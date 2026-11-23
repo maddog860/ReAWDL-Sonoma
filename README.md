@@ -4,6 +4,8 @@
 
 *README updated November 22, 2026 · HE-PR1066 Sonoma Debug build PASS · Standalone Wi-Fi 6 branch build PASS · Release build and independent standalone runtime validation pending*
 
+Contains AI Generated code
+
 ## Overview
 
 ReAWDL is an experimental modification of AirportItlwm, originally developed to investigate native Apple Wireless Direct Link (AWDL) support on Intel wireless hardware. Extensive work on firmware integration, peer discovery, packet handling, and driver reliability also created opportunities to improve ordinary infrastructure Wi-Fi.
@@ -55,7 +57,6 @@ In v3.6.1, the freshness fix is **default-on in source** for supported Intel AX2
 
 The detailed firmware witness/IORegistry data is still optional in compatible Debug builds via `-itlwm-herate`. A new rollback flag, **`-itlwm-hefreshoff`**, disables freshness-aware reporting and restores TLC-only reporting in HE-PR1066 builds. The earlier `-itlwm-hefresh` flag was required in HE-PR1064/1065 but is unnecessary in HE-PR1066.
 
-**Release status:** The complete HE-PR1066 source passed **21/21 structural checks**, **13/13 policy tests**, and **Sonoma14.4 Debug compilation** on the developer’s Mac. The independent eight-file `wifi6-he-fix` adaptation also passed **23/23 source checks**, **13/13 policy tests**, **12/12 decoder tests**, and a standalone Sonoma14.4 Debug compilation; it was published as commit `38a9bb4`. HE-PR1065 has the clearest documented on-device rate-reporting observations. Independent runtime testing of the standalone patch and a Release-build validation are still pending. The full HE-PR1066 source was published to the project master branch as commit `220e258`, with the generated firmware source excluded from version control.
 
 ## Performance and Validation
 
